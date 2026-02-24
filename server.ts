@@ -271,17 +271,20 @@ async function startServer() {
 
   app.use(express.json());
   app.use('/uploads', express.static(uploadsDir));
+  app.set("trust proxy", 1);
   app.use(session({
+    name: "boss.sid",
     secret: process.env.SESSION_SECRET || "bossexam-secret-key-v2",
     resave: true,
     saveUninitialized: false,
     rolling: true,
     store: new FileStore(),
-    cookie: { 
+    cookie: {
+      path: "/",
+      httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 дней
-      httpOnly: true
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 дней
     }
   }));
 
@@ -329,7 +332,10 @@ async function startServer() {
         block_reason: user.block_reason,
         balance: user.balance,
       };
-      res.json({ success: true, user: req.session.user });
+      req.session.save((err) => {
+        if (err) return res.status(500).json({ error: "Ошибка сохранения сессии" });
+        res.json({ success: true, user: req.session.user });
+      });
     } catch (err) {
       res.status(400).json({ error: "Имя пользователя уже занято" });
     }
@@ -340,9 +346,9 @@ async function startServer() {
     const user = db.prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(?)").get(username) as any;
     
     if (user && bcrypt.compareSync(password, user.password)) {
-      req.session.user = { 
-        id: user.id, 
-        username: user.username, 
+      req.session.user = {
+        id: user.id,
+        username: user.username,
         role: user.role,
         display_name: user.display_name,
         avatar: user.avatar,
@@ -352,7 +358,10 @@ async function startServer() {
         block_reason: user.block_reason,
         balance: user.balance
       };
-      res.json({ success: true, user: req.session.user });
+      req.session.save((err) => {
+        if (err) return res.status(500).json({ error: "Ошибка сохранения сессии" });
+        res.json({ success: true, user: req.session.user });
+      });
     } else {
       res.status(401).json({ error: "Неверный логин или пароль" });
     }

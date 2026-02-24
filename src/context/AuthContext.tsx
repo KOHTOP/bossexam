@@ -29,14 +29,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const fetchOpts = { credentials: 'include' as RequestCredentials };
+
   const refreshUser = async () => {
-    const res = await fetch('/api/me');
+    const res = await fetch('/api/me', fetchOpts);
     const data = res.ok ? await res.json() : null;
     if (data?.user) setUser(data.user);
   };
 
   useEffect(() => {
-    fetch('/api/me')
+    fetch('/api/me', fetchOpts)
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data?.user) setUser(data.user);
@@ -47,6 +49,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (username: string, password: string) => {
     const res = await fetch('/api/login', {
+      ...fetchOpts,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -62,6 +65,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const register = async (username: string, password: string) => {
     const res = await fetch('/api/register', {
+      ...fetchOpts,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -76,7 +80,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    await fetch('/api/logout', { method: 'POST' });
+    await fetch('/api/logout', { ...fetchOpts, method: 'POST' });
     setUser(null);
   };
 
