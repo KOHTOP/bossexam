@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+}
+
+@layer base {
+  :root, .light {
+    --background: #ffffff;
+    --foreground: #0f172a;
+    --card: #ffffff;
+    --card-foreground: #0f172a;
+    --primary: #2563eb;
+    --primary-foreground: #ffffff;
+    --muted: #f8fafc;
+    --muted-foreground: #64748b;
+    --border: #e2e8f0;
+  }
+
+  html.dark, .dark {
+    --background: #020617;
+    --foreground: #f8fafc;
+    --card: #0f172a;
+    --card-foreground: #f8fafc;
+    --primary: #3b82f6;
+    --primary-foreground: #ffffff;
+    --muted: #1e293b;
+    --muted-foreground: #94a3b8;
+    --border: #1e293b;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}
+
+/* Custom Prose-like styles for v4 */
+.markdown-body {
+  line-height: 1.75;
+}
+
+.markdown-body h1 {
+  @apply text-3xl font-bold mt-8 mb-4;
+}
+
+.markdown-body h2 {
+  @apply text-2xl font-bold mt-6 mb-3;
+}
+
+.markdown-body p {
+  @apply mb-4;
+}
+
+.markdown-body ul {
+  @apply list-disc pl-6 mb-4;
+}
+
+.markdown-body ol {
+  @apply list-decimal pl-6 mb-4;
+}
+
+.markdown-body blockquote {
+  @apply border-l-4 border-primary pl-4 italic my-4;
+}
+
+.markdown-body code {
+  @apply bg-[var(--muted)] px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.markdown-body pre {
+  @apply bg-[var(--muted)] p-4 rounded-lg overflow-x-auto my-4 font-mono text-sm;
+}
+
+.markdown-body img {
+  @apply rounded-xl max-w-full h-auto my-6;
+}
+
+.markdown-body a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-body a:hover {
+  opacity: 0.85;
+}
+
+.markdown-body details {
+  @apply my-4 rounded-xl border border-[var(--border)] overflow-hidden;
+}
+.markdown-body summary {
+  @apply px-4 py-3 bg-[var(--muted)] cursor-pointer font-medium list-none;
+}
+.markdown-body summary::-webkit-details-marker {
+  display: none;
+}
+.markdown-body details[open] summary {
+  @apply border-b border-[var(--border)];
+}
+.markdown-body details > *:not(summary) {
+  @apply p-4;
+}
+
+/* Hide scrollbar but keep scroll */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Стилизованные ползунки для админ-таблиц */
+.admin-table-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+}
+.admin-table-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+.admin-table-scroll::-webkit-scrollbar-track {
+  background: var(--muted);
+  border-radius: 5px;
+}
+.admin-table-scroll::-webkit-scrollbar-thumb {
+  background: var(--primary);
+  border-radius: 5px;
+}
+.admin-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+  opacity: 0.9;
+}
+.admin-table-scroll::-webkit-scrollbar-corner {
+  background: var(--muted);
+  border-radius: 5px;
+}
+
+/* Убрать стрелки у поля числа */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
