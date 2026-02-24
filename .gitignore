@@ -1,0 +1,5 @@
+.env
+image/
+public/
+sessions/
+bossexam.db
