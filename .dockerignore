@@ -1,0 +1,7 @@
+.env
+Dockerfile
+bossexam.db
+public/
+image/
+sessions/
+

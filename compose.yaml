@@ -1,0 +1,14 @@
+services:
+  bossexam:
+    container_name: bossexam
+    restart: unless-stopped
+    build: .
+    env_file: .env
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./bossexam.db:/app/bossexam.db # run "touch bossexam.db && chown 100:100 bossexam.db" in project directory
+      - ./public:/app/public
+      - ./image:/app/image
+      - ./sessions:/app/sessions
+       
