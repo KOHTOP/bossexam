@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Markdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 import { motion } from 'motion/react';
 import { Shield } from 'lucide-react';
 
@@ -30,7 +31,7 @@ export const PrivacyPage: React.FC = () => {
         <h1 className="text-3xl font-bold font-display tracking-tight">Политика конфиденциальности</h1>
       </div>
       <div className="markdown-body">
-        <Markdown>{content}</Markdown>
+        <Markdown remarkPlugins={[remarkBreaks]}>{content}</Markdown>
       </div>
       <section className="mt-10 pt-8 border-t border-[var(--border)]">
         <h2 className="text-xl font-bold font-display mb-4">Использование cookies</h2>

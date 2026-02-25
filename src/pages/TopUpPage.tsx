@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { CreditCard, QrCode, Bitcoin, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 
 const DEFAULT_MIN = 1;
 
@@ -45,9 +46,8 @@ export const TopUpPage: React.FC = () => {
     setMessage(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/payment/create', {
+      const res = await authFetch('/api/payment/create', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount, paymentMethod: method })
       });
       const data = await res.json();

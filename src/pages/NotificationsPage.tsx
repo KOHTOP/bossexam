@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bell, ChevronRight, MessageSquare, User, ShoppingBag, Wallet } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 
 type NotificationType = 'comment' | 'user' | 'purchase' | 'topup';
 
@@ -59,7 +60,7 @@ export const NotificationsPage: React.FC = () => {
 
   const fetchNotifications = () => {
     setLoading(true);
-    fetch(`/api/notifications?category=${tab}`)
+    authFetch(`/api/notifications?category=${tab}`)
       .then(res => res.ok ? res.json() : [])
       .then(data => setNotifications(Array.isArray(data) ? data : []))
       .catch(() => setNotifications([]))
@@ -67,13 +68,13 @@ export const NotificationsPage: React.FC = () => {
   };
 
   const markAsRead = (id: number) => {
-    fetch(`/api/notifications/${id}/read`, { method: 'PATCH' }).then(() => {
+    authFetch(`/api/notifications/${id}/read`, { method: 'PATCH' }).then(() => {
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: 1 } : n));
     });
   };
 
   const markAllRead = () => {
-    fetch('/api/notifications/read-all', { method: 'PATCH' }).then(() => {
+    authFetch('/api/notifications/read-all', { method: 'PATCH' }).then(() => {
       setNotifications(prev => prev.map(n => ({ ...n, read: 1 })));
     });
   };

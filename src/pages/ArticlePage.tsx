@@ -3,11 +3,15 @@ import { useParams, Link } from 'react-router-dom';
 import { Article } from '../lib/utils';
 import Markdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { ChevronLeft, Calendar, Tag, Share2, User, Eye, MessageSquare, Send, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { ProductEmbed } from '../components/ProductEmbed';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 import { useDocumentHead } from '../hooks/useDocumentHead';
+import { mathInlineToHtml } from '../lib/mathInline';
 
 interface Comment {
   id: number;
@@ -32,6 +36,7 @@ export const ArticlePage: React.FC = () => {
   // Comment form state
   const [commentContent, setCommentContent] = useState('');
   const [captcha, setCaptcha] = useState('');
+  const [captchaId, setCaptchaId] = useState<string | null>(null);
   const [captchaText, setCaptchaText] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -44,7 +49,7 @@ export const ArticlePage: React.FC = () => {
           setArticle(data);
           
           // Track view
-          fetch(`/api/articles/${slug}/view`, { method: 'POST' });
+          fetch(`/api/articles/${slug}/view`, { method: 'POST', credentials: 'include' });
           
           // Fetch comments
           const commentsRes = await fetch(`/api/articles/${slug}/comments`);
@@ -71,7 +76,8 @@ export const ArticlePage: React.FC = () => {
     try {
       const res = await fetch('/api/captcha');
       const data = await res.json();
-      setCaptchaText(data.captcha);
+      setCaptchaId(data.captchaId ?? null);
+      setCaptchaText(data.captcha ?? '');
     } catch (err) {
       console.error('Failed to fetch captcha');
     }
@@ -99,13 +105,13 @@ export const ArticlePage: React.FC = () => {
     
     setSubmitting(true);
     try {
-      const res = await fetch('/api/comments', {
+      const res = await authFetch('/api/comments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           article_id: article?.id,
           content: commentContent,
-          captcha
+          captcha,
+          captchaId
         })
       });
       const data = await res.json();
@@ -191,6 +197,7 @@ export const ArticlePage: React.FC = () => {
             return (
               <Markdown
                 key={i}
+                remarkPlugins={[remarkGfm, remarkBreaks]}
                 rehypePlugins={[rehypeRaw]}
                 components={{
                   a: ({ href, children }) => (
@@ -198,9 +205,19 @@ export const ArticlePage: React.FC = () => {
                       {children}
                     </a>
                   ),
+                  table: ({ children, ...props }) => (
+                    <div className="table-scroll-wrap">
+                      <table {...props}>{children}</table>
+                    </div>
+                  ),
+                  thead: ({ children, ...props }) => <thead {...props}>{children}</thead>,
+                  tbody: ({ children, ...props }) => <tbody {...props}>{children}</tbody>,
+                  tr: ({ children, ...props }) => <tr {...props}>{children}</tr>,
+                  th: ({ children, ...props }) => <th {...props}>{children}</th>,
+                  td: ({ children, ...props }) => <td {...props}>{children}</td>,
                 }}
               >
-                {part}
+                {mathInlineToHtml(part)}
               </Markdown>
             );
           });

@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { User, Sun, Moon, Menu, X, Plus, ChevronDown, Bell } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { authFetch } from '../lib/auth';
 import { cn, Article } from '../lib/utils';
 import { LoadingScreen } from './LoadingScreen';
 import { CookieConsent } from './CookieConsent';
@@ -22,11 +23,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const [notifDetail, setNotifDetail] = useState<typeof notifList[0] | null>(null);
 
   const isAdmin = user?.role === 'admin' || user?.role === 'superadmin';
+  const isAdminPage = location.pathname === '/admin' || location.pathname.startsWith('/admin/');
 
   useEffect(() => {
     if (!isAdmin) return;
     const fetchUnread = () => {
-      fetch('/api/notifications/unread-count')
+      authFetch('/api/notifications/unread-count')
         .then(res => res.ok ? res.json() : { count: 0 })
         .then(data => setNotifUnreadCount(data?.count ?? 0))
         .catch(() => setNotifUnreadCount(0));
@@ -38,7 +40,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     if (!isAdmin || !notifDropdownOpen) return;
-    fetch('/api/notifications?category=all')
+    authFetch('/api/notifications?category=all')
       .then(res => res.ok ? res.json() : [])
       .then(data => setNotifList(Array.isArray(data) ? data.slice(0, 10) : []))
       .catch(() => setNotifList([]));
@@ -79,6 +81,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       )}
       
+      {!isAdminPage && (
       <header className="sticky top-0 z-50 w-full border-b border-[var(--border)] bg-[var(--background)]/80 backdrop-blur-md">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -284,52 +287,57 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           </div>
         </div>
       </header>
+      )}
 
-      <div className="flex-1 container mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <main className="lg:col-span-8">
+      {isAdminPage ? (
+        <div className="flex-1 flex flex-col min-h-0">
           {children}
-        </main>
-
-        <aside className="lg:col-span-4 space-y-6">
-          <div className="bg-[var(--card)] rounded-2xl border border-[var(--border)] overflow-hidden shadow-sm">
-            <div className="h-12 bg-primary flex items-center px-6">
-              <h3 className="text-white font-bold">Последние обновления</h3>
+        </div>
+      ) : (
+        <div className="flex-1 container mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+          <main className="lg:col-span-8">
+            {children}
+          </main>
+          <aside className="lg:col-span-4 space-y-6">
+            <div className="bg-[var(--card)] rounded-2xl border border-[var(--border)] overflow-hidden shadow-sm">
+              <div className="h-12 bg-primary flex items-center px-6">
+                <h3 className="text-white font-bold">Последние обновления</h3>
+              </div>
+              <div className="p-4 divide-y divide-[var(--border)]">
+                {recentArticles.length > 0 ? recentArticles.map((article) => (
+                  <Link 
+                    key={article.id} 
+                    to={`/article/${article.slug}`}
+                    className="block py-4 group"
+                  >
+                    <h4 className="text-sm font-medium group-hover:text-primary transition-colors line-clamp-2">
+                      {article.title}
+                    </h4>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {new Date(article.created_at).toLocaleDateString()}
+                    </p>
+                  </Link>
+                )) : (
+                  <p className="py-4 text-sm text-muted-foreground text-center italic">Нет новых обновлений</p>
+                )}
+              </div>
             </div>
-            <div className="p-4 divide-y divide-[var(--border)]">
-              {recentArticles.length > 0 ? recentArticles.map((article) => (
-                <Link 
-                  key={article.id} 
-                  to={`/article/${article.slug}`}
-                  className="block py-4 group"
-                >
-                  <h4 className="text-sm font-medium group-hover:text-primary transition-colors line-clamp-2">
-                    {article.title}
-                  </h4>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {new Date(article.created_at).toLocaleDateString()}
-                  </p>
-                </Link>
-              )) : (
-                <p className="py-4 text-sm text-muted-foreground text-center italic">Нет новых обновлений</p>
-              )}
+            <div className="bg-[var(--card)] rounded-2xl border border-[var(--border)] p-6 shadow-sm space-y-4">
+              <Link to="/privacy" className="block text-sm text-muted-foreground hover:text-primary transition-colors">
+                Политика конфиденциальности
+              </Link>
+              <Link to="/terms" className="block text-sm text-muted-foreground hover:text-primary transition-colors">
+                Пользовательское соглашение
+              </Link>
+              <div className="pt-4 border-t border-[var(--border)]">
+                <p className="text-xs text-muted-foreground/60">
+                  boss-exam.com © {new Date().getFullYear()}. Все права защищены.
+                </p>
+              </div>
             </div>
-          </div>
-
-          <div className="bg-[var(--card)] rounded-2xl border border-[var(--border)] p-6 shadow-sm space-y-4">
-            <Link to="/privacy" className="block text-sm text-muted-foreground hover:text-primary transition-colors">
-              Политика конфиденциальности
-            </Link>
-            <Link to="/terms" className="block text-sm text-muted-foreground hover:text-primary transition-colors">
-              Пользовательское соглашение
-            </Link>
-            <div className="pt-4 border-t border-[var(--border)]">
-              <p className="text-xs text-muted-foreground/60">
-                boss-exam.com © {new Date().getFullYear()}. Все права защищены.
-              </p>
-            </div>
-          </div>
-        </aside>
-      </div>
+          </aside>
+        </div>
+      )}
       {notifDetail && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setNotifDetail(null)}>
           <div className="bg-[var(--card)] rounded-2xl border border-[var(--border)] shadow-xl max-w-lg w-full max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>

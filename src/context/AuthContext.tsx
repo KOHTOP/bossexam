@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { getToken, setToken, removeToken, authFetch } from '../lib/auth';
 
 interface User {
   id: number;
@@ -29,58 +30,61 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchOpts = { credentials: 'include' as RequestCredentials };
-
   const refreshUser = async () => {
-    const res = await fetch('/api/me', fetchOpts);
-    const data = res.ok ? await res.json() : null;
-    if (data?.user) setUser(data.user);
+    const res = await authFetch('/api/me');
+    const data = res.ok ? await res.json() : { user: null };
+    setUser(data?.user ?? null);
   };
 
   useEffect(() => {
-    fetch('/api/me', fetchOpts)
-      .then(res => res.ok ? res.json() : null)
+    if (!getToken()) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+    authFetch('/api/me')
+      .then(res => res.ok ? res.json() : { user: null })
       .then(data => {
-        if (data?.user) setUser(data.user);
+        setUser(data?.user ?? null);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        setUser(null);
+        setLoading(false);
+      });
   }, []);
 
   const login = async (username: string, password: string) => {
-    const res = await fetch('/api/login', {
-      ...fetchOpts,
+    const res = await authFetch('/api/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    if (res.ok) {
-      const data = await res.json();
-      setUser(data.user);
-    } else {
+    if (!res.ok) {
       const data = await res.json();
       throw new Error(data.error || 'Ошибка входа');
     }
+    const data = await res.json();
+    if (data.token) setToken(data.token);
+    setUser(data.user);
   };
 
   const register = async (username: string, password: string) => {
-    const res = await fetch('/api/register', {
-      ...fetchOpts,
+    const res = await authFetch('/api/register', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    if (res.ok) {
-      const data = await res.json();
-      setUser(data.user);
-    } else {
+    if (!res.ok) {
       const data = await res.json();
       throw new Error(data.error || 'Ошибка регистрации');
     }
+    const data = await res.json();
+    if (data.token) setToken(data.token);
+    setUser(data.user);
   };
 
   const logout = async () => {
-    await fetch('/api/logout', { ...fetchOpts, method: 'POST' });
+    await authFetch('/api/logout', { method: 'POST' });
+    removeToken();
     setUser(null);
   };
 

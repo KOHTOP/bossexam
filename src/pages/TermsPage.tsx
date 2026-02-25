@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Markdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 import { motion } from 'motion/react';
 import { FileText } from 'lucide-react';
 
@@ -30,7 +31,7 @@ export const TermsPage: React.FC = () => {
         <h1 className="text-3xl font-bold font-display tracking-tight">Пользовательское соглашение</h1>
       </div>
       <div className="markdown-body">
-        <Markdown>{content}</Markdown>
+        <Markdown remarkPlugins={[remarkBreaks]}>{content}</Markdown>
       </div>
     </motion.div>
   );

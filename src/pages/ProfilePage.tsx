@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 import { useNavigate } from 'react-router-dom';
 import { User, LogOut, Key, Upload, CheckCircle2, ShoppingBag, ExternalLink, Calendar } from 'lucide-react';
 
@@ -37,7 +38,7 @@ export const ProfilePage: React.FC = () => {
         avatar: user.avatar || '',
         telegram: user.telegram || ''
       });
-      fetch('/api/purchases')
+      authFetch('/api/purchases')
         .then(res => res.ok ? res.json() : [])
         .then(setPurchases)
         .catch(() => setPurchases([]));
@@ -46,9 +47,8 @@ export const ProfilePage: React.FC = () => {
 
   const handleUpdateProfile = async () => {
     try {
-      const res = await fetch(`/api/admin/users/${user!.id}`, {
+      const res = await authFetch(`/api/admin/users/${user!.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(profileData)
       });
       if (res.ok) {
@@ -66,9 +66,8 @@ export const ProfilePage: React.FC = () => {
       return alert('Пароли не совпадают');
     }
     try {
-      const res = await fetch(`/api/admin/users/${user!.id}/password`, {
+      const res = await authFetch(`/api/admin/users/${user!.id}/password`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: changePassword.new })
       });
       if (res.ok) {
@@ -88,7 +87,7 @@ export const ProfilePage: React.FC = () => {
     const formData = new FormData();
     formData.append('image', file);
     try {
-      const res = await fetch('/api/admin/upload', { method: 'POST', body: formData });
+      const res = await authFetch('/api/admin/upload', { method: 'POST', body: formData });
       if (res.ok) {
         const data = await res.json();
         setProfileData(prev => ({ ...prev, avatar: data.url }));

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShoppingCart, ArrowLeft, Minus, Plus, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 import { cn } from '../lib/utils';
 import { useDocumentHead } from '../hooks/useDocumentHead';
 
@@ -18,7 +19,7 @@ interface Product {
 
 export const ProductDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [product, setProduct] = useState<Product | null>(null);
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
   const [quantity, setQuantity] = useState(1);
@@ -47,9 +48,9 @@ export const ProductDetailPage: React.FC = () => {
 
   useEffect(() => {
     if (user) {
-      fetch('/api/cart')
+      authFetch('/api/cart')
         .then(res => res.ok ? res.json() : [])
-        .then((data: any[]) => setCart(data.map((item: any) => ({ id: item.id, name: item.name, price: item.price, image: item.image, quantity: item.quantity }))))
+        .then((data: any[]) => setCart(Array.isArray(data) ? data.map((item: any) => ({ id: item.id, name: item.name, price: item.price, image: item.image, quantity: item.quantity })) : []))
         .catch(() => setCart([]));
     } else {
       setCart([]);
@@ -63,16 +64,18 @@ export const ProductDetailPage: React.FC = () => {
     }
     if (!product) return;
     try {
-      const res = await fetch('/api/cart', {
+      const res = await authFetch('/api/cart', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ product_id: product.id, quantity })
       });
       if (res.ok) {
         setMessage({ text: 'Товар добавлен в корзину', type: 'success' });
-        fetch('/api/cart')
+        authFetch('/api/cart')
           .then(r => r.ok ? r.json() : [])
-          .then((data: any[]) => setCart(data.map((item: any) => ({ id: item.id, name: item.name, price: item.price, image: item.image, quantity: item.quantity }))));
+          .then((data: any[]) => setCart(Array.isArray(data) ? data.map((item: any) => ({ id: item.id, name: item.name, price: item.price, image: item.image, quantity: item.quantity })) : []));
+      } else if (res.status === 401) {
+        setMessage({ text: 'Войдите снова.', type: 'error' });
+        refreshUser?.();
       } else {
         setMessage({ text: 'Ошибка при добавлении', type: 'error' });
       }

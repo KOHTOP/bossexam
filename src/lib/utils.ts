@@ -15,4 +15,6 @@ export interface Article {
   views: number;
   created_at: string;
   is_pinned?: number | boolean;
+  source_type?: string | null;
+  source_url?: string | null;
 }

@@ -1,14 +1,15 @@
 import React, { useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { Article, cn } from '../lib/utils';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 import { useNavigate, Link } from 'react-router-dom';
 import { 
   Plus, Edit2, Trash2, X, Save, ExternalLink, 
   Bold, Italic, List, ListOrdered, Link as LinkIcon, Quote, EyeOff, 
-  Image as ImageIcon, LogOut, Lock, User, 
+  Image as ImageIcon, LogOut, Lock, User, Heading1, Heading2, Heading3, Code, Minus, Table as TableIcon, 
   BarChart3, Settings, FileText, Upload, CheckCircle2, AlertCircle,
   Users as UsersIcon, Eye, Key, MessageSquare, Check, Ban, Search as SearchIcon, ShoppingCart,
-  Webhook, Copy, CheckCircle, ChevronLeft, ChevronRight, Star
+  Webhook, Copy, CheckCircle, ChevronLeft, ChevronRight, Star, Menu, LayoutDashboard
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -37,6 +38,7 @@ interface AdminUser {
   is_verified?: boolean;
   is_blocked?: boolean;
   block_reason?: string;
+  balance?: number;
 }
 
 interface AdminComment {
@@ -148,6 +150,31 @@ export const AdminPage: React.FC = () => {
   const [replyToId, setReplyToId] = useState<number | null>(null);
   const [replyContent, setReplyContent] = useState('');
   const [replying, setReplying] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
+  const [editUserForm, setEditUserForm] = useState<{
+    display_name: string;
+    avatar: string;
+    telegram: string;
+    role: string;
+    is_verified: boolean;
+    is_blocked: boolean;
+    block_reason: string;
+    balance: number;
+  }>({ display_name: '', avatar: '', telegram: '', role: 'user', is_verified: false, is_blocked: false, block_reason: '', balance: 0 });
+  const [editUserSaving, setEditUserSaving] = useState(false);
+  const editUserAvatarInputRef = useRef<HTMLInputElement>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('admin-sidebar-collapsed') === 'true';
+  });
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      try { window.localStorage.setItem('admin-sidebar-collapsed', String(next)); } catch (_) {}
+      return next;
+    });
+  };
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -235,21 +262,21 @@ export const AdminPage: React.FC = () => {
   };
 
   const fetchUsers = () => {
-    fetch('/api/admin/users', { credentials: 'include' })
+    authFetch('/api/admin/users')
       .then(res => res.ok ? res.json() : [])
       .then(data => setAdminUsers(Array.isArray(data) ? data : []))
       .catch(() => setAdminUsers([]));
   };
 
   const fetchComments = () => {
-    fetch('/api/admin/comments', { credentials: 'include' })
+    authFetch('/api/admin/comments')
       .then(res => res.ok ? res.json() : [])
       .then(data => setComments(Array.isArray(data) ? data : []))
       .catch(() => setComments([]));
   };
 
   const fetchReviews = () => {
-    fetch('/api/admin/reviews', { credentials: 'include' })
+    authFetch('/api/admin/reviews')
       .then(res => res.ok ? res.json() : [])
       .then(data => setReviews(Array.isArray(data) ? data : []))
       .catch(() => setReviews([]));
@@ -257,7 +284,7 @@ export const AdminPage: React.FC = () => {
 
   const fetchStats = () => {
     const defaultStats = { totalArticles: 0, totalViews: 0, lastUpdate: '', totalUsers: 0, totalProducts: 0, totalPurchases: 0, totalComments: 0, pendingComments: 0, pendingReviews: 0, totalRevenue: 0, topArticle: null as { title: string; views: number } | null };
-    fetch('/api/admin/stats', { credentials: 'include' })
+    authFetch('/api/admin/stats')
       .then(res => res.ok ? res.json() : defaultStats)
       .then(data => setStats(typeof data === 'object' && data !== null ? { ...defaultStats, ...data } : defaultStats))
       .catch(() => setStats(defaultStats));
@@ -274,7 +301,7 @@ export const AdminPage: React.FC = () => {
   };
 
   const fetchPaymentLog = (page: number) => {
-    fetch(`/api/admin/payment-log?page=${page}&limit=15`)
+    authFetch(`/api/admin/payment-log?page=${page}&limit=15`)
       .then(res => res.json())
       .then(data => {
         setPaymentLog({ items: data.items || [], total: data.total || 0, page: data.page || 1, totalPages: data.totalPages || 0 });
@@ -300,7 +327,7 @@ export const AdminPage: React.FC = () => {
       : '/api/admin/articles';
 
     try {
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(currentArticle)
@@ -325,7 +352,7 @@ export const AdminPage: React.FC = () => {
 
   const handleCreateUser = async () => {
     try {
-      const res = await fetch('/api/admin/users', {
+      const res = await authFetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newUser)
@@ -346,7 +373,7 @@ export const AdminPage: React.FC = () => {
   const handleDeleteUser = async (id: number) => {
     if (!confirm('Удалить этого пользователя?')) return;
     try {
-      const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/admin/users/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchUsers();
       } else {
@@ -364,7 +391,7 @@ export const AdminPage: React.FC = () => {
     }
     
     try {
-      const res = await fetch(`/api/admin/users/${user.id}/password`, {
+      const res = await authFetch(`/api/admin/users/${user.id}/password`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: changePassword.new })
@@ -382,7 +409,7 @@ export const AdminPage: React.FC = () => {
 
   const handleUpdateProfile = async () => {
     try {
-      const res = await fetch(`/api/admin/users/${user.id}`, {
+      const res = await authFetch(`/api/admin/users/${user.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(profileData)
@@ -403,7 +430,7 @@ export const AdminPage: React.FC = () => {
     const formData = new FormData();
     formData.append('image', file);
     try {
-      const res = await fetch('/api/admin/upload', { method: 'POST', body: formData });
+      const res = await authFetch('/api/admin/upload', { method: 'POST', body: formData });
       if (res.ok) {
         const data = await res.json();
         if (isEditingProduct) setIsEditingProduct({ ...isEditingProduct, image: data.url });
@@ -424,7 +451,7 @@ export const AdminPage: React.FC = () => {
       : { ...newProduct, category: newProduct.category || 'Общее', tags: newProduct.tags || '' };
 
     try {
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -443,7 +470,7 @@ export const AdminPage: React.FC = () => {
   const handleDeleteProduct = async (id: number) => {
     if (!confirm('Удалить этот товар?')) return;
     try {
-      const res = await fetch(`/api/admin/products/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/admin/products/${id}`, { method: 'DELETE' });
       if (res.ok) fetchProducts();
     } catch (err) {
       alert('Ошибка при удалении');
@@ -454,7 +481,7 @@ export const AdminPage: React.FC = () => {
     const amount = prompt('Введите сумму для пополнения:');
     if (!amount) return;
     try {
-      const res = await fetch('/api/balance/topup', {
+      const res = await authFetch('/api/balance/topup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount: parseInt(amount) })
@@ -476,7 +503,7 @@ export const AdminPage: React.FC = () => {
     formData.append('image', file);
 
     try {
-      const res = await fetch('/api/admin/upload', {
+      const res = await authFetch('/api/admin/upload', {
         method: 'POST',
         body: formData
       });
@@ -493,13 +520,17 @@ export const AdminPage: React.FC = () => {
 
   const handleUserAction = async (id: number, data: any) => {
     try {
-      const res = await fetch(`/api/admin/users/${id}`, {
+      const res = await authFetch(`/api/admin/users/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
       if (res.ok) {
         fetchUsers();
+        if (editingUser?.id === id) {
+          setEditingUser(prev => prev ? { ...prev, ...data } : null);
+          setEditUserForm(prev => ({ ...prev, ...data }));
+        }
       } else {
         const errData = await res.json();
         alert(errData.error);
@@ -509,9 +540,70 @@ export const AdminPage: React.FC = () => {
     }
   };
 
+  const openEditUser = (u: AdminUser) => {
+    setEditingUser(u);
+    setEditUserForm({
+      display_name: u.display_name ?? '',
+      avatar: u.avatar ?? '',
+      telegram: u.telegram ?? '',
+      role: u.role ?? 'user',
+      is_verified: !!u.is_verified,
+      is_blocked: !!u.is_blocked,
+      block_reason: u.block_reason ?? '',
+      balance: u.balance ?? 0
+    });
+  };
+
+  const saveEditUser = async () => {
+    if (!editingUser) return;
+    setEditUserSaving(true);
+    try {
+      const payload: any = {
+        display_name: editUserForm.display_name.trim() || undefined,
+        avatar: editUserForm.avatar,
+        telegram: editUserForm.telegram.trim() || undefined,
+        role: user?.role === 'superadmin' ? editUserForm.role : undefined,
+        is_verified: user?.role === 'superadmin' ? (editUserForm.is_verified ? 1 : 0) : undefined,
+        is_blocked: user?.role === 'superadmin' ? (editUserForm.is_blocked ? 1 : 0) : undefined,
+        block_reason: user?.role === 'superadmin' ? (editUserForm.block_reason.trim() || undefined) : undefined,
+        balance: user?.role === 'superadmin' ? editUserForm.balance : undefined
+      };
+      const res = await authFetch(`/api/admin/users/${editingUser.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        fetchUsers();
+        setEditingUser(null);
+      } else {
+        const errData = await res.json();
+        alert(errData.error || 'Ошибка сохранения');
+      }
+    } catch (err) {
+      alert('Ошибка сети');
+    } finally {
+      setEditUserSaving(false);
+    }
+  };
+
+  const handleEditUserAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('image', file);
+    authFetch('/api/admin/upload', { method: 'POST', body: formData })
+      .then(res => res.json())
+      .then(data => { if (data.url) setEditUserForm(prev => ({ ...prev, avatar: data.url })); })
+      .catch(() => alert('Ошибка загрузки'));
+    e.target.value = '';
+  };
+
+  const removeEditUserAvatar = () => setEditUserForm(prev => ({ ...prev, avatar: '' }));
+
   const handleCommentStatus = async (id: number, status: string) => {
     try {
-      const res = await fetch(`/api/admin/comments/${id}`, {
+      const res = await authFetch(`/api/admin/comments/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
@@ -527,7 +619,7 @@ export const AdminPage: React.FC = () => {
   const handleDeleteComment = async (id: number) => {
     if (!confirm('Удалить комментарий?')) return;
     try {
-      const res = await fetch(`/api/admin/comments/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/admin/comments/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchComments();
       }
@@ -538,7 +630,7 @@ export const AdminPage: React.FC = () => {
 
   const handleReviewStatus = async (id: number, status: string) => {
     try {
-      const res = await fetch(`/api/admin/reviews/${id}`, {
+      const res = await authFetch(`/api/admin/reviews/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
@@ -559,7 +651,7 @@ export const AdminPage: React.FC = () => {
     if (!replyContent.trim()) return;
     setReplying(true);
     try {
-      const res = await fetch(`/api/admin/comments/${commentId}/reply`, {
+      const res = await authFetch(`/api/admin/comments/${commentId}/reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: replyContent.trim() })
@@ -582,7 +674,7 @@ export const AdminPage: React.FC = () => {
   const handleBlockUser = async () => {
     if (!isBlockingUser) return;
     try {
-      const res = await fetch(`/api/admin/users/${isBlockingUser}`, {
+      const res = await authFetch(`/api/admin/users/${isBlockingUser}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_blocked: 1, block_reason: blockReason })
@@ -599,7 +691,7 @@ export const AdminPage: React.FC = () => {
 
   const handleSaveSettings = async (key: string, value: string) => {
     try {
-      const res = await fetch(`/api/admin/settings/${key}`, {
+      const res = await authFetch(`/api/admin/settings/${key}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value })
@@ -615,7 +707,7 @@ export const AdminPage: React.FC = () => {
   const handleDelete = async (id: number) => {
     if (!confirm('Вы уверены, что хотите удалить эту статью?')) return;
     try {
-      const res = await fetch(`/api/admin/articles/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/admin/articles/${id}`, { method: 'DELETE' });
       if (res.status === 401) {
         alert('Сессия истекла. Пожалуйста, войдите снова.');
         logout();
@@ -636,7 +728,7 @@ export const AdminPage: React.FC = () => {
     formData.append('image', file);
 
     try {
-      const res = await fetch('/api/admin/upload', {
+      const res = await authFetch('/api/admin/upload', {
         method: 'POST',
         body: formData
       });
@@ -693,143 +785,182 @@ export const AdminPage: React.FC = () => {
     (u.display_name || '').toLowerCase().includes(userSearch.toLowerCase())
   );
 
-  if (authLoading) return <div className="flex items-center justify-center h-64">Загрузка...</div>;
+  if (authLoading) return (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <div className="animate-pulse text-muted-foreground font-medium">Загрузка...</div>
+    </div>
+  );
   if (!user) return null;
 
+  const navItem = (tab: AdminTab, label: string, icon: React.ReactNode) => (
+    <button
+      type="button"
+      title={label}
+      onClick={() => { setActiveTab(tab); setSidebarOpen(false); }}
+      className={cn(
+        "w-full flex items-center gap-3 rounded-xl text-sm font-medium transition-all",
+        sidebarCollapsed ? "justify-center px-0 py-3" : "px-4 py-3",
+        activeTab === tab
+          ? "bg-primary/15 text-primary border border-primary/30"
+          : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]/80 hover:text-foreground border border-transparent"
+      )}
+    >
+      {icon}
+      {!sidebarCollapsed && <span>{label}</span>}
+    </button>
+  );
+
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-bold font-display tracking-tight">
-            {user.role === 'user' ? 'Личный кабинет' : 'Панель управления'}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Добро пожаловать, <span className="font-bold text-foreground">{user.username}</span> 
-            <span className="ml-2 px-2 py-0.5 rounded bg-primary/10 text-primary text-[10px] uppercase font-black">
-              {user.role === 'superadmin' ? 'Главный админ' : user.role === 'admin' ? 'Модератор' : 'Пользователь'}
-            </span>
-          </p>
+    <div className="min-h-screen flex bg-[var(--background)]">
+      {/* Mobile overlay */}
+      <div
+        className={cn("fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity lg:hidden", sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none")}
+        onClick={() => setSidebarOpen(false)}
+        aria-hidden
+      />
+
+      {/* Sidebar */}
+      <aside
+        className={cn(
+          "admin-sidebar-aside fixed left-0 top-0 z-50 h-full flex flex-col bg-[var(--card)] border-r border-[var(--border)] shadow-xl",
+          "transition-[transform,width] duration-300 ease-out lg:translate-x-0",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full",
+          "w-72",
+          sidebarCollapsed ? "lg:w-20 lg:overflow-hidden" : "lg:w-72"
+        )}
+      >
+        <div className={cn("border-b border-[var(--border)] flex items-center shrink-0 overflow-hidden", sidebarCollapsed ? "p-3 justify-center" : "p-4 justify-between")}>
+          <Link
+            to="/"
+            onClick={() => setSidebarOpen(false)}
+            title="На сайт"
+            className={cn("flex items-center gap-3 min-w-0 rounded-xl transition-colors hover:opacity-90", sidebarCollapsed && "justify-center")}
+          >
+            <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center text-primary shrink-0">
+              <LayoutDashboard size={22} />
+            </div>
+            {!sidebarCollapsed && (
+              <span className="font-display font-bold text-lg tracking-tight truncate">
+                {user.role === 'user' ? 'Кабинет' : 'Админка'}
+              </span>
+            )}
+          </Link>
+          {!sidebarCollapsed && (
+            <button type="button" onClick={() => setSidebarOpen(false)} className="p-2 rounded-lg hover:bg-[var(--muted)] lg:hidden shrink-0">
+              <X size={20} />
+            </button>
+          )}
         </div>
-        <div className="flex gap-3">
+
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-1 admin-sidebar-nav admin-sidebar-scroll min-h-0">
           {user.role !== 'user' && (
-            <button
-              onClick={() => openEditor()}
-              className="flex items-center gap-2 bg-primary text-white px-5 py-2.5 rounded-xl font-bold hover:bg-primary/90 transition-all shadow-lg shadow-primary/20"
-            >
-              <Plus size={20} />
-              Новая статья
-            </button>
+            <>
+              {!sidebarCollapsed && <p className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Контент</p>}
+              {navItem('articles', 'Статьи', <FileText size={20} className="shrink-0" />)}
+              {navItem('stats', 'Статистика', <BarChart3 size={20} className="shrink-0" />)}
+            </>
           )}
+          {user.role === 'superadmin' && (
+            <>
+              {!sidebarCollapsed && <p className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground mt-4">Пользователи</p>}
+              {navItem('users', 'Пользователи', <UsersIcon size={20} className="shrink-0" />)}
+            </>
+          )}
+          {(user.role === 'superadmin' || user.role === 'admin') && (
+            <>
+              {!sidebarCollapsed && <p className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground mt-4">Сообщество</p>}
+              {navItem('comments', 'Комментарии', <MessageSquare size={20} className="shrink-0" />)}
+              {navItem('reviews', 'Отзывы', <Star size={20} className="shrink-0" />)}
+            </>
+          )}
+          {(user.role === 'superadmin' || user.role === 'admin') && (
+            <>
+              {!sidebarCollapsed && <p className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground mt-4">Магазин</p>}
+              {navItem('products', 'Товары', <ShoppingCart size={20} className="shrink-0" />)}
+            </>
+          )}
+          {user.role !== 'user' && (
+            <>
+              {!sidebarCollapsed && <p className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground mt-4">Система</p>}
+              {navItem('settings', 'Настройки', <Settings size={20} className="shrink-0" />)}
+              {navItem('webhooks', 'PLATEGA', <Webhook size={20} className="shrink-0" />)}
+            </>
+          )}
+          {!sidebarCollapsed && <p className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground mt-4">Аккаунт</p>}
+          {navItem('profile', 'Профиль', <User size={20} className="shrink-0" />)}
+        </nav>
+
+        <div className={cn("border-t border-[var(--border)] shrink-0", sidebarCollapsed ? "p-3" : "p-4")}>
           <button
-            onClick={logout}
-            className="flex items-center gap-2 bg-[var(--muted)] text-foreground px-5 py-2.5 rounded-xl font-medium hover:bg-red-500 hover:text-white transition-all border border-[var(--border)]"
+            type="button"
+            onClick={toggleSidebarCollapsed}
+            title={sidebarCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            className="hidden lg:flex w-full items-center justify-center p-2 rounded-xl text-muted-foreground hover:bg-[var(--muted)] hover:text-foreground transition-colors"
           >
-            <LogOut size={20} />
-            Выйти
+            {sidebarCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
           </button>
+          <div className={cn(
+            "rounded-xl bg-[var(--muted)]/50 flex items-center gap-3",
+            sidebarCollapsed ? "justify-center p-2" : "px-4 py-3"
+          )}>
+            <div className="w-9 h-9 rounded-lg bg-primary/20 flex items-center justify-center overflow-hidden shrink-0">
+              {user.avatar ? <img src={user.avatar} alt="" className="w-full h-full object-cover" /> : <User size={18} className="text-primary" />}
+            </div>
+            {!sidebarCollapsed && (
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-sm truncate">{user.display_name || user.username}</p>
+                <p className="text-[10px] uppercase font-bold text-muted-foreground truncate">{user.role}</p>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      </aside>
 
-      <div className="flex flex-wrap gap-2 p-1 bg-[var(--muted)] rounded-2xl border border-[var(--border)] w-fit">
-        {user.role !== 'user' && (
-          <>
-            <button
-              onClick={() => setActiveTab('articles')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-                activeTab === 'articles' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              <FileText size={18} /> Статьи
+      {/* Main area */}
+      <div className={cn("flex-1 flex flex-col min-h-screen transition-[padding] duration-300", sidebarCollapsed ? "lg:pl-20" : "lg:pl-72")}>
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-2 sm:gap-4 px-3 py-3 sm:px-4 sm:py-4 bg-[var(--background)]/95 backdrop-blur-md border-b border-[var(--border)]">
+          <div className="flex items-center gap-4">
+            <button type="button" onClick={() => setSidebarOpen(true)} className="p-2 rounded-xl hover:bg-[var(--muted)] lg:hidden">
+              <Menu size={24} />
             </button>
+            <div>
+              <h1 className="text-xl font-display font-bold tracking-tight">
+                {activeTab === 'articles' && 'Статьи'}
+                {activeTab === 'stats' && 'Статистика'}
+                {activeTab === 'users' && 'Пользователи'}
+                {activeTab === 'comments' && 'Комментарии'}
+                {activeTab === 'reviews' && 'Отзывы'}
+                {activeTab === 'products' && 'Товары'}
+                {activeTab === 'webhooks' && 'PLATEGA'}
+                {activeTab === 'settings' && 'Настройки'}
+                {activeTab === 'profile' && 'Профиль'}
+              </h1>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {user.role === 'user' ? 'Личный кабинет' : 'Панель управления'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {user.role !== 'user' && activeTab === 'articles' && (
+              <button
+                onClick={() => openEditor()}
+                className="flex items-center gap-2 bg-primary text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-primary/90 transition-all shadow-lg shadow-primary/25"
+              >
+                <Plus size={18} />
+                Новая статья
+              </button>
+            )}
             <button
-              onClick={() => setActiveTab('stats')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-                activeTab === 'stats' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-              )}
+              onClick={logout}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 transition-all border border-[var(--border)]"
             >
-              <BarChart3 size={18} /> Статистика
+              <LogOut size={18} />
+              <span className="hidden sm:inline">Выйти</span>
             </button>
-          </>
-        )}
-        {user.role === 'superadmin' && (
-          <button
-            onClick={() => setActiveTab('users')}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-              activeTab === 'users' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <UsersIcon size={18} /> Пользователи
-          </button>
-        )}
-        {(user.role === 'superadmin' || user.role === 'admin') && (
-          <button
-            onClick={() => setActiveTab('comments')}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-              activeTab === 'comments' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <MessageSquare size={18} /> Комментарии
-          </button>
-        )}
-        {(user.role === 'superadmin' || user.role === 'admin') && (
-          <button
-            onClick={() => setActiveTab('reviews')}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-              activeTab === 'reviews' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <Star size={18} /> Отзывы
-          </button>
-        )}
-        {user.role !== 'user' && (
-          <button
-            onClick={() => setActiveTab('settings')}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-              activeTab === 'settings' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <Settings size={18} /> Настройки
-          </button>
-        )}
-        {(user.role === 'superadmin' || user.role === 'admin') && (
-          <button
-            onClick={() => setActiveTab('products')}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-              activeTab === 'products' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <ShoppingCart size={18} /> Товары
-          </button>
-        )}
-        {(user.role === 'superadmin' || user.role === 'admin') && (
-          <button
-            onClick={() => setActiveTab('webhooks')}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-              activeTab === 'webhooks' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <Webhook size={18} /> PLATEGA
-          </button>
-        )}
-        <button
-          onClick={() => setActiveTab('profile')}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
-            activeTab === 'profile' ? "bg-[var(--card)] text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          <User size={18} /> Профиль
-        </button>
-      </div>
+          </div>
+        </header>
 
+        <main className="flex-1 p-4 md:p-6 lg:p-8 admin-main-content">
       <motion.div
         key={activeTab}
         initial={{ opacity: 0, y: 10 }}
@@ -837,7 +968,7 @@ export const AdminPage: React.FC = () => {
         className="space-y-6"
       >
         {activeTab === 'articles' && (
-          <div className="bg-[var(--card)] rounded-3xl border border-[var(--border)] overflow-hidden shadow-sm">
+          <div className="bg-[var(--card)] rounded-2xl border border-[var(--border)] overflow-hidden shadow-sm">
             <div className="flex flex-col md:flex-row md:items-center gap-4 p-4 border-b border-[var(--border)]">
               <div className="relative flex-1 max-w-sm">
                 <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
@@ -950,9 +1081,9 @@ export const AdminPage: React.FC = () => {
 
         {activeTab === 'stats' && (
           <div className="space-y-8">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-              <div className="bg-[var(--card)] p-6 rounded-3xl border border-[var(--border)] shadow-sm space-y-4">
-                <div className="bg-blue-500/10 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-500">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
+              <div className="bg-[var(--card)] p-6 rounded-2xl border border-[var(--border)] shadow-sm hover:shadow-md transition-shadow space-y-4">
+                <div className="bg-blue-500/10 w-12 h-12 rounded-xl flex items-center justify-center text-blue-500">
                   <FileText size={24} />
                 </div>
                 <div>
@@ -1140,7 +1271,14 @@ export const AdminPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="p-5 text-right">
-                        <div className="flex justify-end gap-2">
+                        <div className="flex justify-end gap-2 flex-wrap">
+                          <button
+                            onClick={() => openEditUser(u)}
+                            className="p-2 text-primary hover:bg-primary/10 rounded-lg transition-all"
+                            title="Редактировать"
+                          >
+                            <Edit2 size={18} />
+                          </button>
                           {user.role === 'superadmin' && u.username.toLowerCase() !== 'examsflow' && (
                             <>
                               {u.is_blocked ? (
@@ -1650,10 +1788,10 @@ export const AdminPage: React.FC = () => {
               <button
                 onClick={() => {
                   Promise.all([
-                    fetch('/api/admin/settings/platega_merchant_id', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaMerchantId }) }),
-                    fetch('/api/admin/settings/platega_secret', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaSecret }) }),
-                    fetch('/api/admin/settings/platega_base_url', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaBaseUrl }) }),
-                    fetch('/api/admin/settings/platega_webhook_secret', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaWebhookSecret }) }),
+                    authFetch('/api/admin/settings/platega_merchant_id', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaMerchantId }) }),
+                    authFetch('/api/admin/settings/platega_secret', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaSecret }) }),
+                    authFetch('/api/admin/settings/platega_base_url', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaBaseUrl }) }),
+                    authFetch('/api/admin/settings/platega_webhook_secret', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaWebhookSecret }) }),
                   ]).then(() => alert('Сохранено'));
                 }}
                 className="bg-primary text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-primary/90 transition-all"
@@ -1787,7 +1925,159 @@ export const AdminPage: React.FC = () => {
         )}
       </motion.div>
 
-      <AnimatePresence>
+        <AnimatePresence>
+        {editingUser && (
+          <div key={`edit-user-${editingUser.id}`} className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setEditingUser(null)}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-[var(--card)] w-full max-w-lg rounded-2xl shadow-2xl border border-[var(--border)] flex flex-col overflow-hidden"
+            >
+              <div className="p-5 border-b border-[var(--border)] flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center text-primary">
+                    <Edit2 size={22} />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold font-display">Редактирование пользователя</h2>
+                    <p className="text-xs text-muted-foreground">@{editingUser.username}</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setEditingUser(null)} className="p-2 rounded-lg hover:bg-[var(--muted)] transition-colors">
+                  <X size={22} />
+                </button>
+              </div>
+              <div className="p-6 space-y-5 overflow-y-auto max-h-[70vh]">
+                {/* Аватар */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Аватар</label>
+                  <div className="flex items-center gap-4">
+                    <div className="w-20 h-20 rounded-xl bg-[var(--muted)] border border-[var(--border)] overflow-hidden flex items-center justify-center shrink-0">
+                      {editUserForm.avatar ? (
+                        <img src={editUserForm.avatar} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <User size={32} className="text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={() => editUserAvatarInputRef.current?.click()}
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white text-sm font-bold hover:bg-primary/90 transition-colors"
+                      >
+                        <Upload size={16} />
+                        Загрузить
+                      </button>
+                      <input ref={editUserAvatarInputRef} type="file" className="hidden" accept="image/*" onChange={handleEditUserAvatarUpload} />
+                      {editUserForm.avatar && (
+                        <button
+                          type="button"
+                          onClick={removeEditUserAvatar}
+                          className="flex items-center gap-2 px-4 py-2 rounded-xl border border-[var(--border)] text-sm font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/30 transition-colors"
+                        >
+                          <Trash2 size={14} />
+                          Удалить аватарку
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                {/* Ник (отображаемое имя) */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Отображаемое имя (ник)</label>
+                  <input
+                    type="text"
+                    className="w-full p-3 rounded-xl border border-[var(--border)] bg-[var(--background)] outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                    value={editUserForm.display_name}
+                    onChange={e => setEditUserForm(prev => ({ ...prev, display_name: e.target.value }))}
+                    placeholder="Как отображается на сайте"
+                  />
+                </div>
+                {/* Telegram */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Telegram</label>
+                  <input
+                    type="text"
+                    className="w-full p-3 rounded-xl border border-[var(--border)] bg-[var(--background)] outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                    value={editUserForm.telegram}
+                    onChange={e => setEditUserForm(prev => ({ ...prev, telegram: e.target.value }))}
+                    placeholder="@username"
+                  />
+                </div>
+                {user?.role === 'superadmin' && (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Роль</label>
+                      <select
+                        className="w-full p-3 rounded-xl border border-[var(--border)] bg-[var(--background)] outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                        value={editUserForm.role}
+                        onChange={e => setEditUserForm(prev => ({ ...prev, role: e.target.value }))}
+                      >
+                        <option value="user">user</option>
+                        <option value="admin">admin</option>
+                        <option value="superadmin">superadmin</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Баланс (₽)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        className="w-full p-3 rounded-xl border border-[var(--border)] bg-[var(--background)] outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                        value={editUserForm.balance}
+                        onChange={e => setEditUserForm(prev => ({ ...prev, balance: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+                      />
+                    </div>
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editUserForm.is_verified}
+                          onChange={e => setEditUserForm(prev => ({ ...prev, is_verified: e.target.checked }))}
+                          className="rounded border-[var(--border)] text-primary focus:ring-primary/20"
+                        />
+                        <span className="text-sm font-medium">Подтверждён</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editUserForm.is_blocked}
+                          onChange={e => setEditUserForm(prev => ({ ...prev, is_blocked: e.target.checked }))}
+                          className="rounded border-[var(--border)] text-primary focus:ring-primary/20"
+                        />
+                        <span className="text-sm font-medium">Заблокирован</span>
+                      </label>
+                    </div>
+                    {editUserForm.is_blocked && (
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Причина блокировки</label>
+                        <input
+                          type="text"
+                          className="w-full p-3 rounded-xl border border-[var(--border)] bg-[var(--background)] outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                          value={editUserForm.block_reason}
+                          onChange={e => setEditUserForm(prev => ({ ...prev, block_reason: e.target.value }))}
+                          placeholder="Причина (видна пользователю)"
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="p-5 border-t border-[var(--border)] flex justify-end gap-3 bg-[var(--muted)]/20">
+                <button type="button" onClick={() => setEditingUser(null)} className="px-4 py-2.5 rounded-xl border border-[var(--border)] font-medium hover:bg-[var(--muted)] transition-colors">
+                  Отмена
+                </button>
+                <button type="button" onClick={saveEditUser} disabled={editUserSaving} className="px-5 py-2.5 rounded-xl bg-primary text-white font-bold hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center gap-2">
+                  {editUserSaving ? 'Сохранение...' : 'Сохранить'}
+                  <Save size={18} />
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {(isCreatingProduct || isEditingProduct) && (
           <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
             <motion.div
@@ -2093,11 +2383,19 @@ export const AdminPage: React.FC = () => {
                     <div className="bg-[var(--muted)]/50 p-3 border-b border-[var(--border)] flex flex-wrap gap-2">
                       <button onClick={() => insertText('**', '**')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Жирный"><Bold size={18} /></button>
                       <button onClick={() => insertText('*', '*')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Курсив"><Italic size={18} /></button>
+                      <button onClick={() => insertText('`', '`')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Код"><Code size={18} /></button>
+                      <div className="w-px h-6 bg-[var(--border)] mx-1" />
+                      <button onClick={() => insertText('\n# ', '')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Заголовок 1"><Heading1 size={18} /></button>
+                      <button onClick={() => insertText('\n## ', '')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Заголовок 2"><Heading2 size={18} /></button>
+                      <button onClick={() => insertText('\n### ', '')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Заголовок 3"><Heading3 size={18} /></button>
                       <div className="w-px h-6 bg-[var(--border)] mx-1" />
                       <button onClick={() => insertText('\n- ')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Список"><List size={18} /></button>
                       <button onClick={() => insertText('\n1. ')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Нумерованный список"><ListOrdered size={18} /></button>
                       <button onClick={() => insertText('\n> ', '')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Цитата"><Quote size={18} /></button>
                       <button onClick={() => insertText('\n<details><summary>Спойлер</summary>\n\n', '\n\n</details>\n')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Спойлер"><EyeOff size={18} /></button>
+                      <button onClick={() => insertText('\n\n```\n', '\n```\n')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Блок кода"><Code size={18} /></button>
+                      <button onClick={() => insertText('\n\n| Колонка 1 | Колонка 2 |\n| --- | --- |\n| ячейка | ячейка |\n\n', '')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Таблица"><TableIcon size={18} /></button>
+                      <button onClick={() => insertText('\n\n---\n\n', '')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Горизонтальная линия"><Minus size={18} /></button>
                       <div className="w-px h-6 bg-[var(--border)] mx-1" />
                       <button onClick={() => insertText('[', '](url)')} className="p-2 hover:bg-primary hover:text-white rounded-lg transition-all" title="Ссылка"><LinkIcon size={18} /></button>
                       <button
@@ -2154,6 +2452,8 @@ export const AdminPage: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
+        </main>
+      </div>
     </div>
   );
 };

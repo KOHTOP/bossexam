@@ -108,6 +108,88 @@
   @apply p-4;
 }
 
+/* Таблицы: границы и перенос строк в ячейках (одна строка = одна линия) */
+.markdown-body table {
+  @apply w-full border-collapse my-4;
+  border: 1px solid var(--border);
+  min-width: 280px;
+}
+.markdown-body th,
+.markdown-body td {
+  @apply px-4 py-2 border;
+  border-color: var(--border);
+  white-space: pre-line;
+}
+.markdown-body th {
+  @apply bg-[var(--muted)] font-semibold text-left;
+}
+.markdown-body tr:hover td {
+  background: var(--muted);
+}
+
+/* Таблицы на мобильных: горизонтальный скролл и компактные ячейки */
+.markdown-body .table-scroll-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 1rem -0.5rem 1.5rem;
+  padding: 0 0.25rem;
+}
+.markdown-body .table-scroll-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  border: 1px solid var(--border);
+  min-width: 280px;
+}
+.markdown-body .table-scroll-wrap th,
+.markdown-body .table-scroll-wrap td {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  white-space: pre-line;
+}
+.markdown-body .table-scroll-wrap th {
+  background: var(--muted);
+  font-weight: 600;
+  text-align: left;
+}
+.markdown-body .table-scroll-wrap tr:hover td {
+  background: var(--muted);
+}
+@media (max-width: 640px) {
+  .markdown-body table,
+  .markdown-body .table-scroll-wrap table {
+    font-size: 0.8125rem;
+  }
+  .markdown-body th,
+  .markdown-body td,
+  .markdown-body .table-scroll-wrap th,
+  .markdown-body .table-scroll-wrap td {
+    padding: 0.375rem 0.5rem;
+  }
+}
+
+/* Математика: дроби и степени в статьях */
+.markdown-body .math-frac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: middle;
+  margin: 0 0.15em;
+}
+.markdown-body .math-frac .math-num {
+  border-bottom: 1px solid var(--foreground);
+  padding-bottom: 0.1em;
+}
+.markdown-body .math-frac .math-den {
+  padding-top: 0.15em;
+  font-size: 0.95em;
+  opacity: 0.9;
+}
+.markdown-body .math-frac .math-num sup,
+.markdown-body .math-frac .math-den sup {
+  font-size: 0.75em;
+}
+
 /* Hide scrollbar but keep scroll */
 .scrollbar-hide {
   -ms-overflow-style: none;
@@ -152,4 +234,71 @@ input[type="number"]::-webkit-outer-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+/* Admin panel: sidebar and content */
+.admin-sidebar-nav button:active {
+  transform: scale(0.98);
+}
+@media (min-width: 1024px) {
+  .admin-main-content {
+    background: linear-gradient(180deg, var(--muted) 0%, transparent 12rem);
+  }
+}
+
+/* Админка: сайдбар не съезжает при сворачивании */
+.admin-sidebar-aside {
+  flex-shrink: 0;
+}
+.admin-sidebar-aside nav {
+  flex: 1 1 0;
+  min-height: 0;
+}
+/* Удобные зоны нажатия на мобильных */
+@media (max-width: 1023px) {
+  .admin-sidebar-nav button,
+  .admin-sidebar-nav a {
+    min-height: 2.75rem;
+  }
+}
+
+/* Админка и общие таблицы на мобильных */
+@media (max-width: 768px) {
+  .admin-table-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+  .admin-main-content {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}
+@media (max-width: 640px) {
+  .admin-main-content table th,
+  .admin-main-content table td {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+  }
+}
+
+/* Стиль ползунка в сайдбаре админки */
+.admin-sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.admin-sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.admin-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+.admin-sidebar-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.admin-sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
+.admin-sidebar-scroll::-webkit-scrollbar-corner {
+  background: transparent;
 }

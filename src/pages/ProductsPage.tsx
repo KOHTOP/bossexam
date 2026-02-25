@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShoppingCart, X, Search as SearchIcon } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 import { cn } from '../lib/utils';
 
 interface Product {
@@ -55,14 +56,18 @@ export const ProductsPage: React.FC = () => {
 
   const fetchCart = async () => {
     try {
-      const res = await fetch('/api/cart');
-      const data = await res.json();
-      setCart(data.map((item: any) => ({
+      const res = await authFetch('/api/cart');
+      if (res.status === 401) {
+        setCart([]);
+        return;
+      }
+      const data = res.ok ? await res.json() : [];
+      setCart(Array.isArray(data) ? data.map((item: any) => ({
         ...item,
         cart_id: item.id
-      })));
-    } catch (err) {
-      console.error('Failed to fetch cart');
+      })) : []);
+    } catch {
+      setCart([]);
     }
   };
 
@@ -72,9 +77,8 @@ export const ProductsPage: React.FC = () => {
       return;
     }
     try {
-      const res = await fetch('/api/cart', {
+      const res = await authFetch('/api/cart', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ product_id: product.id })
       });
       if (res.ok) {
@@ -88,7 +92,7 @@ export const ProductsPage: React.FC = () => {
 
   const removeFromCart = async (cartId: number) => {
     try {
-      const res = await fetch(`/api/cart/${cartId}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/cart/${cartId}`, { method: 'DELETE' });
       if (res.ok) fetchCart();
     } catch (err) {
       console.error('Failed to remove from cart');
@@ -97,7 +101,7 @@ export const ProductsPage: React.FC = () => {
 
   const checkout = async () => {
     try {
-      const res = await fetch('/api/cart/checkout', { method: 'POST' });
+      const res = await authFetch('/api/cart/checkout', { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
         const names = cart.map(i => i.name).join(', ');

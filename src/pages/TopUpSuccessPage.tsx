@@ -2,17 +2,18 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 
 export const TopUpSuccessPage: React.FC = () => {
   const { refreshUser } = useAuth();
-  const [status, setStatus] = useState<'loading' | 'CONFIRMED' | 'PENDING' | 'ERROR'>('loading');
+  const [status, setStatus] = useState<'loading' | 'CONFIRMED' | 'PENDING' | 'ERROR' | 'CANCELED' | 'NONE'>('loading');
   const [credited, setCredited] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const check = async () => {
       try {
-        const res = await fetch('/api/payment/check-return');
+        const res = await authFetch('/api/payment/check-return');
         const data = await res.json();
         if (cancelled) return;
         setStatus(data.status || 'ERROR');

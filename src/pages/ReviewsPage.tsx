@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MessageSquare, Send, User, ShoppingBag, Package, RefreshCw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { authFetch } from '../lib/auth';
 import { useDocumentHead } from '../hooks/useDocumentHead';
 
 interface Review {
@@ -45,9 +46,8 @@ export const ReviewsPage: React.FC = () => {
     if (!content.trim()) return;
     setSubmitting(true);
     try {
-      const res = await fetch('/api/reviews', {
+      const res = await authFetch('/api/reviews', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: content.trim() })
       });
       const data = await res.json();

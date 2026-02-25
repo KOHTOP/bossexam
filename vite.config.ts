@@ -18,6 +18,8 @@ export default defineConfig(({mode}) => {
     server: {
       hmr: false,
       allowedHosts: true,
+      // Если в dev за прокси на порту 24678, раскомментируйте для HMR:
+      // hmr: { clientPort: 24678, protocol: 'wss', host: 'boss-exam.fun' },
     },
   };
 });

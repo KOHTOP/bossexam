@@ -4,13 +4,17 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
-import session from "express-session";
+import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import multer from "multer";
 import fs from "fs";
+import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const db = new Database("bossexam.db");
+
+const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || "bossexam-jwt-secret-v2";
+const JWT_EXPIRES = "30d";
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, "public", "uploads");
@@ -18,42 +22,33 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Persistent session store (files) so restart doesn't log everyone out
-const sessionsDir = path.join(__dirname, "sessions");
-if (!fs.existsSync(sessionsDir)) {
-  fs.mkdirSync(sessionsDir, { recursive: true });
-}
-function safeSid(sid: string): string {
-  return sid.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-class FileStore extends session.Store {
-  get(sid: string, cb: (err: any, s?: session.SessionData | null) => void) {
-    const f = path.join(sessionsDir, safeSid(sid) + ".json");
-    fs.readFile(f, "utf8", (err, data) => {
-      if (err && (err as NodeJS.ErrnoException).code !== "ENOENT") return cb(err);
-      if (!data) return cb(null, null);
-      try {
-        const parsed = JSON.parse(data);
-        if (parsed.expires && parsed.expires <= Date.now()) {
-          fs.unlink(f, () => {});
-          return cb(null, null);
-        }
-        cb(null, parsed.session ?? parsed);
-      } catch {
-        cb(null, null);
-      }
-    });
-  }
-  set(sid: string, session: session.SessionData, cb: (err?: any) => void) {
-    const f = path.join(sessionsDir, safeSid(sid) + ".json");
-    const payload = JSON.stringify({
-      session,
-      expires: session.cookie?.expires ? new Date(session.cookie.expires).getTime() : Date.now() + 7 * 24 * 60 * 60 * 1000,
-    });
-    fs.writeFile(f, payload, "utf8", (err) => cb(err));
-  }
-  destroy(sid: string, cb: (err?: any) => void) {
-    fs.unlink(path.join(sessionsDir, safeSid(sid) + ".json"), (err) => cb(err && (err as NodeJS.ErrnoException).code !== "ENOENT" ? err : undefined));
+// In-memory stores (no cookie/session): капча и лимит просмотров
+const captchaStore = new Map<string, string>();
+const viewLimitStore = new Map<string, number>();
+
+function userFromToken(req: any): any {
+  const auth = req.headers.authorization;
+  const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: number };
+    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(decoded.userId) as any;
+    if (!user || user.is_blocked === 1) return null;
+    return {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      display_name: user.display_name,
+      avatar: user.avatar,
+      telegram: user.telegram,
+      is_verified: user.is_verified === 1,
+      is_blocked: user.is_blocked === 1,
+      block_reason: user.block_reason,
+      balance: user.balance,
+      created_at: user.created_at || null,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -147,6 +142,8 @@ addColumn('products', 'delivery_content', "TEXT");
 addColumn('products', 'tags', "TEXT");
 addColumn('products', 'is_pinned', "INTEGER DEFAULT 0");
 addColumn('articles', 'is_pinned', "INTEGER DEFAULT 0");
+addColumn('articles', 'source_type', "TEXT");
+addColumn('articles', 'source_url', "TEXT");
 addColumn('comments', 'parent_id', "INTEGER REFERENCES comments(id) ON DELETE CASCADE");
 addColumn('notifications', 'payload', "TEXT");
 addColumn('users', 'created_at', "DATETIME");
@@ -243,7 +240,7 @@ initSetting('privacy_policy', '# Политика конфиденциально
 initSetting('user_agreement', '# Пользовательское соглашение\n\nИспользуя этот сайт, вы соглашаетесь с правилами.');
 
 // Add sample data if empty
-const count = db.prepare("SELECT COUNT(*) as count FROM articles").get().count;
+const count = (db.prepare("SELECT COUNT(*) as count FROM articles").get() as { count: number }).count;
 if (count === 0) {
   const insert = db.prepare("INSERT INTO articles (title, slug, content, category, author) VALUES (?, ?, ?, ?, ?)");
   insert.run(
@@ -272,25 +269,14 @@ async function startServer() {
   app.use(express.json());
   app.use('/uploads', express.static(uploadsDir));
   app.set("trust proxy", 1);
-  app.use(session({
-    name: "boss.sid",
-    secret: process.env.SESSION_SECRET || "bossexam-secret-key-v2",
-    resave: true,
-    saveUninitialized: false,
-    rolling: true,
-    store: new FileStore(),
-    cookie: {
-      path: "/",
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 дней
-    }
-  }));
 
-  // Auth Middleware
+  app.use((req: any, _res, next) => {
+    req.user = userFromToken(req);
+    next();
+  });
+
   const isAdmin = (req: any, res: any, next: any) => {
-    if (req.session && req.session.user) {
+    if (req.user) {
       next();
     } else {
       res.status(401).json({ error: "Необходима авторизация" });
@@ -312,7 +298,23 @@ async function startServer() {
     }
   };
 
-  // Auth Routes
+  // Auth Routes — JWT в ответе, клиент хранит в localStorage
+  function toUserDto(user: any) {
+    return {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      display_name: user.display_name,
+      avatar: user.avatar,
+      telegram: user.telegram,
+      is_verified: user.is_verified === 1,
+      is_blocked: user.is_blocked === 1,
+      block_reason: user.block_reason,
+      balance: user.balance,
+      created_at: user.created_at || null,
+    };
+  }
+
   app.post("/api/register", (req: any, res: any) => {
     const { username, password } = req.body;
     try {
@@ -320,22 +322,8 @@ async function startServer() {
       const info = db.prepare("INSERT INTO users (username, password, display_name, role, created_at) VALUES (?, ?, ?, 'user', datetime('now'))").run(username, hashedPassword, username);
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(info.lastInsertRowid) as any;
       createNotificationForAdmins("user", "Новый пользователь", `Зарегистрирован: ${username}`, "/admin");
-      req.session.user = {
-        id: user.id,
-        username: user.username,
-        role: user.role,
-        display_name: user.display_name,
-        avatar: user.avatar,
-        telegram: user.telegram,
-        is_verified: user.is_verified === 1,
-        is_blocked: user.is_blocked === 1,
-        block_reason: user.block_reason,
-        balance: user.balance,
-      };
-      req.session.save((err) => {
-        if (err) return res.status(500).json({ error: "Ошибка сохранения сессии" });
-        res.json({ success: true, user: req.session.user });
-      });
+      const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+      res.json({ success: true, user: toUserDto(user), token });
     } catch (err) {
       res.status(400).json({ error: "Имя пользователя уже занято" });
     }
@@ -344,61 +332,20 @@ async function startServer() {
   app.post("/api/login", (req: any, res: any) => {
     const { username, password } = req.body;
     const user = db.prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(?)").get(username) as any;
-    
     if (user && bcrypt.compareSync(password, user.password)) {
-      req.session.user = {
-        id: user.id,
-        username: user.username,
-        role: user.role,
-        display_name: user.display_name,
-        avatar: user.avatar,
-        telegram: user.telegram,
-        is_verified: user.is_verified === 1,
-        is_blocked: user.is_blocked === 1,
-        block_reason: user.block_reason,
-        balance: user.balance
-      };
-      req.session.save((err) => {
-        if (err) return res.status(500).json({ error: "Ошибка сохранения сессии" });
-        res.json({ success: true, user: req.session.user });
-      });
+      const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+      res.json({ success: true, user: toUserDto(user), token });
     } else {
       res.status(401).json({ error: "Неверный логин или пароль" });
     }
   });
 
-  app.post("/api/logout", (req: any, res: any) => {
-    if (req.session) {
-      req.session.destroy(() => {
-        res.json({ success: true });
-      });
-    } else {
-      res.json({ success: true });
-    }
+  app.post("/api/logout", (_req, res) => {
+    res.json({ success: true });
   });
 
   app.get("/api/me", (req: any, res: any) => {
-    if (req.session && req.session.user) {
-      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.session.user.id) as any;
-      if (user) {
-        req.session.user = {
-          id: user.id,
-          username: user.username,
-          role: user.role,
-          display_name: user.display_name,
-          avatar: user.avatar,
-          telegram: user.telegram,
-          is_verified: user.is_verified === 1,
-          is_blocked: user.is_blocked === 1,
-          block_reason: user.block_reason,
-          balance: user.balance,
-          created_at: user.created_at || null
-        };
-      }
-      res.json({ user: req.session.user });
-    } else {
-      res.status(401).json({ error: "Not logged in" });
-    }
+    res.json({ user: req.user || null });
   });
 
   app.get("/api/articles", (req, res) => {
@@ -412,17 +359,15 @@ async function startServer() {
     res.json(article);
   });
 
-  // View tracking with rate limiting (session-based)
+  // View tracking with rate limiting (in-memory by IP)
   app.post("/api/articles/:slug/view", (req: any, res) => {
     const slug = req.params.slug;
     const now = Date.now();
-    
-    if (!req.session.views) req.session.views = {};
-    
-    const lastView = req.session.views[slug] || 0;
-    if (now - lastView > 5000) { // 5 seconds cooldown
+    const ip = (req.ip || req.socket?.remoteAddress || "unknown") + ":" + slug;
+    const lastView = viewLimitStore.get(ip) || 0;
+    if (now - lastView > 5000) {
       db.prepare("UPDATE articles SET views = views + 1 WHERE slug = ?").run(slug);
-      req.session.views[slug] = now;
+      viewLimitStore.set(ip, now);
       res.json({ success: true });
     } else {
       res.json({ success: false, message: "Too soon" });
@@ -457,18 +402,17 @@ async function startServer() {
     });
   });
 
-  // Captcha simple implementation
-  app.get("/api/captcha", (req: any, res) => {
+  // Captcha — храним в памяти по id (без сессии)
+  app.get("/api/captcha", (_req, res) => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let captcha = "";
     for (let i = 0; i < 5; i++) {
       captcha += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    req.session.captcha = captcha;
-    
-    // In a real app we'd use a canvas library to generate an image.
-    // For this environment, we'll return the text and the client will style it to look like a captcha.
-    res.json({ captcha });
+    const captchaId = crypto.randomUUID();
+    captchaStore.set(captchaId, captcha);
+    setTimeout(() => captchaStore.delete(captchaId), 5 * 60 * 1000);
+    res.json({ captchaId, captcha });
   });
 
   // Comments
@@ -492,17 +436,18 @@ async function startServer() {
   });
 
   app.post("/api/comments", (req: any, res) => {
-    if (!req.session.user) return res.status(401).json({ error: "Авторизуйтесь" });
-    if (req.session.user.is_blocked) return res.status(403).json({ error: "Вы заблокированы" });
-    
-    const { article_id, content, captcha } = req.body;
-    if (captcha !== req.session.captcha) {
+    if (!req.user) return res.status(401).json({ error: "Авторизуйтесь" });
+    if (req.user.is_blocked) return res.status(403).json({ error: "Вы заблокированы" });
+    const { article_id, content, captcha, captchaId } = req.body;
+    const expected = captchaId ? captchaStore.get(captchaId) : null;
+    if (!expected || captcha !== expected) {
+      if (captchaId) captchaStore.delete(captchaId);
       return res.status(400).json({ error: "Неверная капча" });
     }
-    
-    db.prepare("INSERT INTO comments (article_id, user_id, content) VALUES (?, ?, ?)").run(article_id, req.session.user.id, content);
+    captchaStore.delete(captchaId);
+    db.prepare("INSERT INTO comments (article_id, user_id, content) VALUES (?, ?, ?)").run(article_id, req.user.id, content);
     const article = db.prepare("SELECT slug, title FROM articles WHERE id = ?").get(article_id) as { slug: string; title: string } | undefined;
-    const displayName = req.session.user.display_name || req.session.user.username || "Пользователь";
+    const displayName = req.user.display_name || req.user.username || "Пользователь";
     createNotificationForAdmins(
       "comment",
       "Новый комментарий",
@@ -520,7 +465,7 @@ async function startServer() {
     if (!parent) return res.status(404).json({ error: "Комментарий не найден" });
     db.prepare(
       "INSERT INTO comments (article_id, user_id, content, status, parent_id) VALUES (?, ?, ?, 'approved', ?)"
-    ).run(parent.article_id, req.session.user.id, String(content).trim(), parentId);
+    ).run(parent.article_id, req.user.id, String(content).trim(), parentId);
     res.json({ success: true });
   });
 
@@ -560,12 +505,12 @@ async function startServer() {
   });
 
   app.post("/api/reviews", (req: any, res) => {
-    if (!req.session?.user) return res.status(401).json({ error: "Авторизуйтесь" });
-    if (req.session.user.is_blocked) return res.status(403).json({ error: "Вы заблокированы" });
+    if (!req.user) return res.status(401).json({ error: "Авторизуйтесь" });
+    if (req.user.is_blocked) return res.status(403).json({ error: "Вы заблокированы" });
     const { content } = req.body || {};
     if (!content || !String(content).trim()) return res.status(400).json({ error: "Введите текст отзыва" });
-    db.prepare("INSERT INTO reviews (user_id, content, status) VALUES (?, ?, 'pending')").run(req.session.user.id, String(content).trim());
-    const displayName = req.session.user.display_name || req.session.user.username || "Пользователь";
+    db.prepare("INSERT INTO reviews (user_id, content, status) VALUES (?, ?, 'pending')").run(req.user.id, String(content).trim());
+    const displayName = req.user.display_name || req.user.username || "Пользователь";
     createNotificationForAdmins("comment", "Новый отзыв", `${displayName} оставил отзыв на модерацию`, "/admin");
     res.json({ success: true, message: "Отзыв отправлен на модерацию" });
   });
@@ -618,10 +563,9 @@ async function startServer() {
 
   // Admin Routes
   app.post("/api/admin/articles", isAdmin, (req, res) => {
-    const { title, content, category, author } = req.body;
+    const { title, content, category, author, source_type, source_url } = req.body;
     let slug = req.body.slug || title.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '');
     
-    // Ensure slug is unique
     let finalSlug = slug;
     let counter = 1;
     while (db.prepare("SELECT id FROM articles WHERE slug = ?").get(finalSlug)) {
@@ -630,24 +574,32 @@ async function startServer() {
     }
 
     try {
-      const info = db.prepare("INSERT INTO articles (title, slug, content, category, author) VALUES (?, ?, ?, ?, ?)").run(title, finalSlug, content, category, author);
-      res.json({ id: info.lastInsertRowid, slug: finalSlug });
+      const st = source_type === 'telegram' ? 'telegram' : null;
+      const su = source_url && String(source_url).trim() ? String(source_url).trim() : null;
+      db.prepare(
+        "INSERT INTO articles (title, slug, content, category, author, source_type, source_url) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run(title, finalSlug, content, category || 'Общее', author || 'Администратор', st, su);
+      const id = db.prepare("SELECT last_insert_rowid() as id").get() as { id: number };
+      res.json({ id: id.id, slug: finalSlug });
     } catch (err) {
       res.status(400).json({ error: "Ошибка при создании статьи" });
     }
   });
 
   app.put("/api/admin/articles/:id", isAdmin, (req, res) => {
-    const { title, slug, content, category, author, is_pinned } = req.body;
+    const { title, slug, content, category, author, is_pinned, source_type, source_url } = req.body;
     
-    // Check if slug is taken by another article
     const existing = db.prepare("SELECT id FROM articles WHERE slug = ? AND id != ?").get(slug, req.params.id);
     if (existing) {
       return res.status(400).json({ error: "Этот Slug уже занят другой статьей" });
     }
 
     try {
-      db.prepare("UPDATE articles SET title = ?, slug = ?, content = ?, category = ?, author = ?, is_pinned = ? WHERE id = ?").run(title, slug, content, category, author, is_pinned ? 1 : 0, req.params.id);
+      const st = source_type === 'telegram' ? 'telegram' : null;
+      const su = source_url && String(source_url).trim() ? String(source_url).trim() : null;
+      db.prepare(
+        "UPDATE articles SET title = ?, slug = ?, content = ?, category = ?, author = ?, is_pinned = ?, source_type = ?, source_url = ? WHERE id = ?"
+      ).run(title, slug, content, category, author, is_pinned ? 1 : 0, st, su, req.params.id);
       res.json({ success: true });
     } catch (err) {
       res.status(400).json({ error: "Ошибка при обновлении статьи" });
@@ -714,22 +666,22 @@ async function startServer() {
 
   // User Management
   app.get("/api/admin/users", isAdmin, (req, res) => {
-    const users = db.prepare("SELECT id, username, role, display_name, avatar, telegram, is_verified, is_blocked, block_reason FROM users").all();
+    const users = db.prepare("SELECT id, username, role, display_name, avatar, telegram, is_verified, is_blocked, block_reason, balance FROM users").all();
     res.json(users);
   });
 
   app.put("/api/admin/users/:id", isAdmin, (req: any, res) => {
-    const { display_name, avatar, telegram, role, is_verified, is_blocked, block_reason } = req.body;
+    const { display_name, avatar, telegram, role, is_verified, is_blocked, block_reason, balance } = req.body;
     
-    // Only superadmin can change roles, verified status, or block admins
+    // Only superadmin can change roles, verified status, block, or balance
     const targetUser = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id) as any;
     if (!targetUser) return res.status(404).json({ error: "Пользователь не найден" });
 
-    if (req.session.user.role !== 'superadmin') {
-      if (role || is_verified !== undefined || is_blocked !== undefined) {
+    if (req.user.role !== 'superadmin') {
+      if (role || is_verified !== undefined || is_blocked !== undefined || balance !== undefined) {
         return res.status(403).json({ error: "Нет прав для изменения системных статусов" });
       }
-      if (req.session.user.id !== parseInt(req.params.id)) {
+      if (req.user.id !== parseInt(req.params.id)) {
         return res.status(403).json({ error: "Нет прав редактировать чужой профиль" });
       }
     }
@@ -737,13 +689,17 @@ async function startServer() {
     const updatedDisplayName = display_name !== undefined ? display_name : targetUser.display_name;
     const updatedAvatar = avatar !== undefined ? avatar : targetUser.avatar;
     const updatedTelegram = telegram !== undefined ? telegram : targetUser.telegram;
-    const updatedRole = (req.session.user.role === 'superadmin' && role !== undefined) ? role : targetUser.role;
-    const updatedVerified = (req.session.user.role === 'superadmin' && is_verified !== undefined) ? is_verified : targetUser.is_verified;
-    const updatedBlocked = (req.session.user.role === 'superadmin' && is_blocked !== undefined) ? is_blocked : targetUser.is_blocked;
-    const updatedBlockReason = (req.session.user.role === 'superadmin' && block_reason !== undefined) ? block_reason : targetUser.block_reason;
+    const updatedRole = (req.user.role === 'superadmin' && role !== undefined) ? role : targetUser.role;
+    const updatedVerified = (req.user.role === 'superadmin' && is_verified !== undefined) ? is_verified : targetUser.is_verified;
+    const updatedBlocked = (req.user.role === 'superadmin' && is_blocked !== undefined) ? is_blocked : targetUser.is_blocked;
+    const updatedBlockReason = (req.user.role === 'superadmin' && block_reason !== undefined) ? block_reason : targetUser.block_reason;
+    const parsedBalance = parseInt(String(balance), 10);
+    const updatedBalance = (req.user.role === 'superadmin' && balance !== undefined)
+      ? (Number.isFinite(parsedBalance) ? Math.max(0, parsedBalance) : targetUser.balance)
+      : targetUser.balance;
 
-    db.prepare("UPDATE users SET display_name = ?, avatar = ?, telegram = ?, role = ?, is_verified = ?, is_blocked = ?, block_reason = ? WHERE id = ?")
-      .run(updatedDisplayName, updatedAvatar, updatedTelegram, updatedRole, updatedVerified, updatedBlocked, updatedBlockReason, req.params.id);
+    db.prepare("UPDATE users SET display_name = ?, avatar = ?, telegram = ?, role = ?, is_verified = ?, is_blocked = ?, block_reason = ?, balance = ? WHERE id = ?")
+      .run(updatedDisplayName, updatedAvatar, updatedTelegram, updatedRole, updatedVerified, updatedBlocked, updatedBlockReason, updatedBalance, req.params.id);
     
     res.json({ success: true });
   });
@@ -790,36 +746,37 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Cart API
-  app.get("/api/cart", isAdmin, (req: any, res) => {
+  // Cart API — GET без авторизации возвращает пустой массив (без 401)
+  app.get("/api/cart", (req: any, res) => {
+    if (!req.user?.id) return res.json([]);
     const items = db.prepare(`
       SELECT c.*, p.name, p.price, p.image
       FROM cart c
       JOIN products p ON c.product_id = p.id
       WHERE c.user_id = ?
-    `).all(req.session.user.id);
+    `).all(req.user.id);
     res.json(items);
   });
 
   app.post("/api/cart", isAdmin, (req: any, res) => {
     const { product_id, quantity = 1 } = req.body;
-    const existing = db.prepare("SELECT id, quantity FROM cart WHERE user_id = ? AND product_id = ?").get(req.session.user.id, product_id) as any;
+    const existing = db.prepare("SELECT id, quantity FROM cart WHERE user_id = ? AND product_id = ?").get(req.user.id, product_id) as any;
     
     if (existing) {
       db.prepare("UPDATE cart SET quantity = quantity + ? WHERE id = ?").run(quantity, existing.id);
     } else {
-      db.prepare("INSERT INTO cart (user_id, product_id, quantity) VALUES (?, ?, ?)").run(req.session.user.id, product_id, quantity);
+      db.prepare("INSERT INTO cart (user_id, product_id, quantity) VALUES (?, ?, ?)").run(req.user.id, product_id, quantity);
     }
     res.json({ success: true });
   });
 
   app.delete("/api/cart/:id", isAdmin, (req: any, res) => {
-    db.prepare("DELETE FROM cart WHERE id = ? AND user_id = ?").run(req.params.id, req.session.user.id);
+    db.prepare("DELETE FROM cart WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
     res.json({ success: true });
   });
 
   app.post("/api/cart/checkout", isAdmin, (req: any, res) => {
-    const userId = req.session.user.id;
+    const userId = req.user.id;
     const user = db.prepare("SELECT balance FROM users WHERE id = ?").get(userId) as any;
     const cartItems = db.prepare(`
       SELECT c.quantity, c.product_id, p.price, p.name as product_name, p.delivery_content
@@ -858,8 +815,8 @@ async function startServer() {
       purchasedAt: new Date().toISOString(),
     });
     createNotificationForAdmins("purchase", "Новая покупка", `${name} совершил покупку на ${total} ₽`, "/admin", purchasePayload);
-    req.session.user.balance -= total;
-    res.json({ success: true, newBalance: req.session.user.balance });
+    req.user.balance -= total;
+    res.json({ success: true, newBalance: req.user.balance });
   });
 
   app.get("/api/purchases", isAdmin, (req: any, res) => {
@@ -869,7 +826,7 @@ async function startServer() {
       LEFT JOIN products pr ON p.product_id = pr.id
       WHERE p.user_id = ?
       ORDER BY p.purchased_at DESC
-    `).all(req.session.user.id);
+    `).all(req.user.id);
     res.json(purchases);
   });
 
@@ -881,20 +838,20 @@ async function startServer() {
     const amt = parseInt(amount);
     if (!amount || amt < minTopUp) return res.status(400).json({ error: `Минимальная сумма пополнения — ${minTopUp} ₽` });
     
-    db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(amt, req.session.user.id);
-    req.session.user.balance = (req.session.user.balance || 0) + amt;
-    const who = req.session.user.display_name || req.session.user.username || "Пользователь";
+    db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(amt, req.user.id);
+    req.user.balance = (req.user.balance || 0) + amt;
+    const who = req.user.display_name || req.user.username || "Пользователь";
     createNotificationForAdmins("topup", "Пополнение баланса", `${who} пополнил баланс на ${amt} ₽`, "/admin");
-    res.json({ success: true, newBalance: req.session.user.balance });
+    res.json({ success: true, newBalance: req.user.balance });
   });
   app.get("/api/notifications", isAdmin, (req: any, res) => {
-    if (req.session.user.role !== "admin" && req.session.user.role !== "superadmin") {
+    if (req.user.role !== "admin" && req.user.role !== "superadmin") {
       return res.status(403).json({ error: "Доступ только для администраторов" });
     }
     const category = (req.query.category as string) || "all";
     let list = db.prepare(
       "SELECT id, type, title, body, link, read, created_at, payload FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 200"
-    ).all(req.session.user.id) as { id: number; type: string; title: string; body: string; link: string | null; read: number; created_at: string; payload: string | null }[];
+    ).all(req.user.id) as { id: number; type: string; title: string; body: string; link: string | null; read: number; created_at: string; payload: string | null }[];
     if (category === "market") {
       list = list.filter((n) => n.type === "purchase" || n.type === "topup");
     } else if (category === "other") {
@@ -904,26 +861,26 @@ async function startServer() {
   });
 
   app.get("/api/notifications/unread-count", isAdmin, (req: any, res) => {
-    if (req.session.user.role !== "admin" && req.session.user.role !== "superadmin") {
+    if (req.user.role !== "admin" && req.user.role !== "superadmin") {
       return res.json({ count: 0 });
     }
-    const row = db.prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = 0").get(req.session.user.id) as { c: number };
+    const row = db.prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = 0").get(req.user.id) as { c: number };
     res.json({ count: row?.c ?? 0 });
   });
 
   app.patch("/api/notifications/:id/read", isAdmin, (req: any, res) => {
-    if (req.session.user.role !== "admin" && req.session.user.role !== "superadmin") {
+    if (req.user.role !== "admin" && req.user.role !== "superadmin") {
       return res.status(403).json({ error: "Доступ только для администраторов" });
     }
-    db.prepare("UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?").run(req.params.id, req.session.user.id);
+    db.prepare("UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
     res.json({ success: true });
   });
 
   app.patch("/api/notifications/read-all", isAdmin, (req: any, res) => {
-    if (req.session.user.role !== "admin" && req.session.user.role !== "superadmin") {
+    if (req.user.role !== "admin" && req.user.role !== "superadmin") {
       return res.status(403).json({ error: "Доступ только для администраторов" });
     }
-    db.prepare("UPDATE notifications SET read = 1 WHERE user_id = ?").run(req.session.user.id);
+    db.prepare("UPDATE notifications SET read = 1 WHERE user_id = ?").run(req.user.id);
     res.json({ success: true });
   });
 
@@ -963,7 +920,7 @@ async function startServer() {
   app.put("/api/admin/users/:id/password", isAdmin, (req: any, res) => {
     const { password } = req.body;
     // Only superadmin can change others' passwords, or user can change their own
-    if (req.session.user.role !== 'superadmin' && req.session.user.id !== parseInt(req.params.id)) {
+    if (req.user.role !== 'superadmin' && req.user.id !== parseInt(req.params.id)) {
       return res.status(403).json({ error: "Нет прав" });
     }
     const hashedPassword = bcrypt.hashSync(password, 10);
@@ -972,10 +929,10 @@ async function startServer() {
   });
 
   app.delete("/api/admin/users/:id", isAdmin, (req: any, res) => {
-    if (req.session.user.role !== 'superadmin') {
+    if (req.user.role !== 'superadmin') {
       return res.status(403).json({ error: "Только главный админ может удалять пользователей" });
     }
-    if (req.session.user.id === parseInt(req.params.id)) {
+    if (req.user.id === parseInt(req.params.id)) {
       return res.status(400).json({ error: "Нельзя удалить самого себя" });
     }
     db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
@@ -1035,7 +992,7 @@ async function startServer() {
           description: `Пополнение баланса BossExam — ${amt} ₽`,
           return: returnUrl,
           failedUrl,
-          payload: String(req.session.user.id),
+          payload: String(req.user.id),
         }),
       });
       const data = await plategaRes.json();
@@ -1048,8 +1005,8 @@ async function startServer() {
       }
       db.prepare(
         "INSERT INTO payment_pending (user_id, amount_rub, platega_transaction_id, status) VALUES (?, ?, ?, 'PENDING')"
-      ).run(req.session.user.id, amt, transactionId);
-      req.session.pendingPaymentTransactionId = transactionId;
+      ).run(req.user.id, amt, transactionId);
+      // transactionId хранится в payment_pending по user_id
       res.json({
         redirect: data.redirect || data.payformSuccessUrl,
         transactionId,
@@ -1092,7 +1049,8 @@ async function startServer() {
   });
 
   app.get("/api/payment/check-return", isAdmin, async (req: any, res) => {
-    const transactionId = req.session.pendingPaymentTransactionId;
+    const row = db.prepare("SELECT platega_transaction_id FROM payment_pending WHERE user_id = ? AND status = 'PENDING' ORDER BY id DESC LIMIT 1").get(req.user.id) as { platega_transaction_id: string } | undefined;
+    const transactionId = row?.platega_transaction_id;
     if (!transactionId) {
       return res.json({ status: "NONE", credited: false });
     }
@@ -1107,7 +1065,7 @@ async function startServer() {
       });
       const data = await plategaRes.json();
       if (!plategaRes.ok) {
-        delete req.session.pendingPaymentTransactionId;
+        // транзакция обработана в БД
         return res.json({ status: "ERROR", credited: false });
       }
       const status = data.status;
@@ -1119,16 +1077,16 @@ async function startServer() {
           const u = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(row.user_id) as { username: string; display_name: string };
           const name = u?.display_name || u?.username || "Пользователь";
           createNotificationForAdmins("topup", "Пополнение баланса", `${name} пополнил баланс на ${row.amount_rub} ₽ (оплата)`, "/admin");
-          if (req.session.user && req.session.user.id === row.user_id) {
+          if (req.user && req.user.id === row.user_id) {
             const user = db.prepare("SELECT balance FROM users WHERE id = ?").get(row.user_id) as any;
-            req.session.user.balance = user.balance;
+            req.user.balance = user.balance;
           }
         }
-        delete req.session.pendingPaymentTransactionId;
+        // транзакция обработана в БД
         return res.json({ status: "CONFIRMED", credited: true });
       }
       if (status === "CANCELED" || status === "CHARGEBACKED") {
-        delete req.session.pendingPaymentTransactionId;
+        // транзакция обработана в БД
       }
       return res.json({ status: status || "PENDING", credited: false });
     } catch (err: any) {
