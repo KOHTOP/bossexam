@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShoppingCart, ArrowLeft, Minus, Plus, X } from 'lucide-react';
+import { ShoppingCart, ArrowLeft, Minus, Plus, X, Share2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { authFetch } from '../lib/auth';
 import { cn } from '../lib/utils';
@@ -15,12 +15,16 @@ interface Product {
   image: string;
   category?: string;
   tags?: string;
+  badge?: string | null;
 }
 
 export const ProductDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { user, refreshUser } = useAuth();
   const [product, setProduct] = useState<Product | null>(null);
+  const [copyDone, setCopyDone] = useState(false);
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -45,6 +49,14 @@ export const ProductDetailPage: React.FC = () => {
         .finally(() => setLoading(false));
     }
   }, [id]);
+
+  const payLink = product ? `${typeof window !== 'undefined' ? window.location.origin : ''}/products/${product.id}?pay` : '';
+  const isPayRedirect = searchParams.has('pay') && !!product;
+
+  useEffect(() => {
+    if (!product || !searchParams.has('pay')) return;
+    navigate(`/topup?product_id=${product.id}&amount=${product.price}`, { replace: true });
+  }, [product, searchParams, navigate]);
 
   useEffect(() => {
     if (user) {
@@ -90,6 +102,14 @@ export const ProductDetailPage: React.FC = () => {
 
   if (loading) return <div className="flex justify-center h-64">Загрузка...</div>;
   if (!product) return <div className="text-center py-16">Товар не найден</div>;
+  if (isPayRedirect) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-4">
+        <div className="animate-pulse text-primary font-bold">Перенаправление на оплату...</div>
+        <p className="text-sm text-muted-foreground">Сейчас откроется страница оплаты товара «{product.name}»</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-10">
@@ -116,8 +136,19 @@ export const ProductDetailPage: React.FC = () => {
           })()}
         </div>
         <div className="lg:w-1/2 p-8 lg:p-12 flex flex-col">
-          <h1 className="text-xl lg:text-2xl font-black uppercase tracking-tight text-foreground">{product.name}</h1>
-          
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-xl lg:text-2xl font-black uppercase tracking-tight text-foreground">{product.name}</h1>
+            {product.badge && (
+              <span
+                className={cn(
+                  'px-2.5 py-0.5 rounded-lg text-xs font-bold uppercase tracking-wider',
+                  product.badge === 'discount' ? 'bg-red-500 text-white' : product.badge === 'new' ? 'bg-green-500 text-white' : product.badge === 'hit' ? 'bg-amber-500 text-white' : 'bg-[var(--muted)] text-foreground'
+                )}
+              >
+                {product.badge === 'discount' ? 'Скидка' : product.badge === 'new' ? 'Новинка' : product.badge === 'hit' ? 'Хит' : product.badge}
+              </span>
+            )}
+          </div>
           <div className="mt-6 space-y-4">
             <div>
               <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Краткое описание</p>
@@ -184,6 +215,7 @@ export const ProductDetailPage: React.FC = () => {
                 {message.text}
               </div>
             )}
+            <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={addToCart}
               className="flex items-center justify-center gap-2 bg-primary text-white px-6 py-3 rounded-xl font-bold text-base uppercase tracking-wide hover:bg-primary/90 transition-all shadow-lg shadow-primary/30"
@@ -191,7 +223,32 @@ export const ProductDetailPage: React.FC = () => {
               <ShoppingCart size={20} />
               В корзину
             </button>
+            {(user?.role === 'admin' || user?.role === 'superadmin') && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!payLink) return;
+                  navigator.clipboard.writeText(payLink).then(() => {
+                    setCopyDone(true);
+                    setTimeout(() => setCopyDone(false), 2000);
+                  });
+                }}
+                className={cn(
+                  "flex items-center gap-2 hover:text-primary transition-all bg-[var(--muted)] px-3 py-1.5 rounded-xl font-bold text-xs uppercase tracking-wider active:scale-95",
+                  copyDone && "text-green-600 dark:text-green-400"
+                )}
+              >
+                <Share2 size={16} />
+                {copyDone ? 'Скопировано' : 'Ссылка на оплату'}
+              </button>
+            )}
           </div>
+          {(user?.role === 'admin' || user?.role === 'superadmin') && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Ссылка ведёт сразу на оплату этого товара. После оплаты товар появится в «Покупках» в профиле.
+            </p>
+          )}
+        </div>
         </div>
       </motion.div>
 

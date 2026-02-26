@@ -1,13 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { Lock, User, ShieldCheck, RefreshCw } from 'lucide-react';
-import { useEffect } from 'react';
 import { cn } from '../lib/utils';
 
+declare global {
+  interface Window {
+    handleTelegramAuth?: (user: { id: number; first_name?: string; last_name?: string; username?: string; photo_url?: string; auth_date: number; hash: string }) => void;
+  }
+}
+
 export const AuthPage: React.FC = () => {
-  const { login, register, user } = useAuth();
+  const { login, register, loginWithTelegram, user } = useAuth();
   const navigate = useNavigate();
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
@@ -16,18 +21,48 @@ export const AuthPage: React.FC = () => {
   const [captchaText, setCaptchaText] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [telegramBotName, setTelegramBotName] = useState('');
+  const telegramContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!isLogin) {
-      refreshCaptcha();
+      fetch('/api/captcha').then(res => res.json()).then(data => setCaptchaText(data.captcha));
     }
   }, [isLogin]);
 
   const refreshCaptcha = () => {
-    fetch('/api/captcha')
-      .then(res => res.json())
-      .then(data => setCaptchaText(data.captcha));
+    fetch('/api/captcha').then(res => res.json()).then(data => setCaptchaText(data.captcha));
   };
+
+  useEffect(() => {
+    fetch('/api/config').then(res => res.json()).then((data: { telegramBotName?: string }) => setTelegramBotName(data?.telegramBotName || ''));
+  }, []);
+
+  useEffect(() => {
+    if (!telegramBotName || !loginWithTelegram) return;
+    window.handleTelegramAuth = (tgUser) => {
+      setError('');
+      setLoading(true);
+      loginWithTelegram(tgUser).then(() => navigate('/')).catch((err: Error) => {
+        setError(err.message);
+      }).finally(() => setLoading(false));
+    };
+    return () => { delete window.handleTelegramAuth; };
+  }, [telegramBotName, loginWithTelegram, navigate]);
+
+  useEffect(() => {
+    if (!telegramBotName || !telegramContainerRef.current) return;
+    const el = document.createElement('script');
+    el.src = 'https://telegram.org/js/telegram-widget.js?22';
+    el.setAttribute('data-telegram-login', telegramBotName);
+    el.setAttribute('data-size', 'large');
+    el.setAttribute('data-onauth', 'handleTelegramAuth');
+    el.setAttribute('data-auth-url', '');
+    el.async = true;
+    telegramContainerRef.current.innerHTML = '';
+    telegramContainerRef.current.appendChild(el);
+    return () => { telegramContainerRef.current?.replaceChildren(); };
+  }, [telegramBotName]);
 
   const getPasswordStrength = (pass: string): 0 | 1 | 2 | 3 => {
     if (pass.length === 0) return 0;
@@ -193,6 +228,20 @@ export const AuthPage: React.FC = () => {
           >
             {loading ? (isLogin ? 'Вход...' : 'Регистрация...') : (isLogin ? 'Войти в систему' : 'Зарегистрироваться')}
           </button>
+
+          {telegramBotName && (
+            <>
+              <div className="relative flex items-center gap-3">
+                <div className="flex-1 h-px bg-[var(--border)]" />
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">или</span>
+                <div className="flex-1 h-px bg-[var(--border)]" />
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <p className="text-sm text-muted-foreground">Войти через Telegram</p>
+                <div ref={telegramContainerRef} className="min-h-[44px] flex items-center justify-center" />
+              </div>
+            </>
+          )}
         </form>
 
         <div className="text-center">

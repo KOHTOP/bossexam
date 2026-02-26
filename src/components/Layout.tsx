@@ -1,13 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { User, Sun, Moon, Menu, X, Plus, ChevronDown, Bell } from 'lucide-react';
+import { User, Sun, Moon, Menu, X, Plus, ChevronDown, Bell, MessageSquare, ShoppingBag, Wallet } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { authFetch } from '../lib/auth';
 import { cn, Article } from '../lib/utils';
+import { formatRelativeTime } from '../lib/relativeTime';
 import { LoadingScreen } from './LoadingScreen';
 import { CookieConsent } from './CookieConsent';
 import { useDocumentHead, getDefaultSEO } from '../hooks/useDocumentHead';
+
+const notifTypeIcon: Record<string, React.ReactNode> = {
+  comment: <MessageSquare size={18} />,
+  user: <User size={18} />,
+  purchase: <ShoppingBag size={18} />,
+  topup: <Wallet size={18} />,
+};
+const notifTypeStyle: Record<string, string> = {
+  comment: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+  user: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  purchase: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  topup: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+};
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
@@ -44,10 +58,48 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       .then(res => res.ok ? res.json() : [])
       .then(data => setNotifList(Array.isArray(data) ? data.slice(0, 10) : []))
       .catch(() => setNotifList([]));
+    if (notifUnreadCount > 0) {
+      authFetch('/api/notifications/read-all', { method: 'PATCH' }).then(() => setNotifUnreadCount(0));
+    }
   }, [isAdmin, notifDropdownOpen]);
 
   const defaultSEO = getDefaultSEO(location.pathname);
-  useDocumentHead(defaultSEO.title, defaultSEO.description);
+  useDocumentHead(defaultSEO.title, defaultSEO.description, undefined, defaultSEO.noindex);
+
+  useEffect(() => {
+    const base = window.location.origin;
+    const data = {
+      '@context': 'https://schema.org',
+      '@graph': [
+        {
+          '@type': 'Organization',
+          name: 'BossExam',
+          url: base,
+          description: 'База статей и материалов для подготовки к экзаменам. Учебные материалы и товары для студентов.',
+        },
+        {
+          '@type': 'WebSite',
+          name: 'BossExam',
+          url: base,
+          description: 'Статьи и материалы для экзаменов',
+          publisher: { '@type': 'Organization', name: 'BossExam', url: base },
+          potentialAction: {
+            '@type': 'SearchAction',
+            target: { '@type': 'EntryPoint', urlTemplate: `${base}/?q={search_term_string}` },
+            'query-input': 'required name=search_term_string',
+          },
+        },
+      ],
+    };
+    let el = document.getElementById('ld-json-site') as HTMLScriptElement | null;
+    if (!el) {
+      el = document.createElement('script');
+      el.id = 'ld-json-site';
+      el.type = 'application/ld+json';
+      document.head.appendChild(el);
+    }
+    el.textContent = JSON.stringify(data);
+  }, []);
 
   useEffect(() => {
     const fetchRecent = () => {
@@ -159,38 +211,48 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 {notifDropdownOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setNotifDropdownOpen(false)} />
-                    <div className="absolute right-0 top-full mt-1 w-[320px] max-h-[400px] overflow-auto py-2 bg-[var(--card)] rounded-xl border border-[var(--border)] shadow-xl z-50">
-                      <div className="px-3 pb-2 border-b border-[var(--border)] flex items-center justify-between">
-                        <span className="text-sm font-bold">Оповещения</span>
+                    <div className="absolute right-0 top-full mt-2 w-[360px] max-h-[420px] overflow-hidden flex flex-col bg-[var(--card)] rounded-2xl border border-[var(--border)] shadow-xl z-50">
+                      <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--muted)]/20 flex items-center justify-between">
+                        <span className="text-sm font-bold text-foreground">Оповещения</span>
+                        {notifUnreadCount > 0 && (
+                          <span className="text-xs font-bold text-primary">{notifUnreadCount} новых</span>
+                        )}
                       </div>
-                      {notifList.length === 0 ? (
-                        <div className="px-4 py-6 text-sm text-muted-foreground text-center">Нет новых оповещений</div>
-                      ) : (
-                        <ul className="divide-y divide-[var(--border)]">
-                          {notifList.map((n) => (
-                            <li key={n.id}>
-                              <button
-                                type="button"
-                                onClick={() => { setNotifDetail(n); setNotifDropdownOpen(false); }}
-                                className={cn(
-                                  "w-full block px-4 py-3 text-left hover:bg-[var(--muted)] transition-colors",
-                                  !n.read && "bg-primary/5"
-                                )}
-                              >
-                                <div className="font-medium text-sm text-foreground">{n.title}</div>
-                                <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{n.body}</div>
-                                <div className="text-[10px] text-muted-foreground/70 mt-1">{new Date(n.created_at).toLocaleString('ru-RU')}</div>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+                      <div className="overflow-y-auto flex-1 min-h-0 notif-panel-scroll">
+                        {notifList.length === 0 ? (
+                          <div className="px-4 py-8 text-sm text-muted-foreground text-center">Нет оповещений</div>
+                        ) : (
+                          <ul className="divide-y divide-[var(--border)]">
+                            {notifList.map((n) => (
+                              <li key={n.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => { setNotifDetail(n); setNotifDropdownOpen(false); }}
+                                  className={cn(
+                                    "w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-[var(--muted)]/30 transition-colors",
+                                    !n.read && "bg-primary/5"
+                                  )}
+                                >
+                                  <span className={cn("shrink-0 w-9 h-9 rounded-xl flex items-center justify-center", notifTypeStyle[n.type] || "bg-[var(--muted)] text-muted-foreground")}>
+                                    {notifTypeIcon[n.type] ?? <Bell size={18} />}
+                                  </span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-semibold text-sm text-foreground">{n.title}</div>
+                                    <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{n.body}</div>
+                                    <div className="text-[11px] text-muted-foreground/80 mt-1">{formatRelativeTime(n.created_at)}</div>
+                                  </div>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
                       <Link
                         to="/notifications"
                         onClick={() => setNotifDropdownOpen(false)}
-                        className="block px-4 py-3 text-sm font-bold text-primary hover:bg-[var(--muted)] transition-colors border-t border-[var(--border)]"
+                        className="flex items-center justify-center gap-2 px-4 py-3 text-sm font-bold text-primary hover:bg-[var(--muted)]/50 transition-colors border-t border-[var(--border)] bg-[var(--muted)]/20"
                       >
-                        Перейти на страницу уведомлений
+                        Все уведомления
                       </Link>
                     </div>
                   </>
@@ -329,9 +391,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <Link to="/terms" className="block text-sm text-muted-foreground hover:text-primary transition-colors">
                 Пользовательское соглашение
               </Link>
+              <Link to="/contacts" className="block text-sm text-muted-foreground hover:text-primary transition-colors">
+                Контакты
+              </Link>
               <div className="pt-4 border-t border-[var(--border)]">
                 <p className="text-xs text-muted-foreground/60">
-                  boss-exam.com © {new Date().getFullYear()}. Все права защищены.
+                  BossExam © {new Date().getFullYear()}. Все права защищены.
                 </p>
               </div>
             </div>
@@ -340,37 +405,59 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       )}
       {notifDetail && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setNotifDetail(null)}>
-          <div className="bg-[var(--card)] rounded-2xl border border-[var(--border)] shadow-xl max-w-lg w-full max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
-            <div className="p-6 border-b border-[var(--border)] flex items-center justify-between">
-              <h2 className="text-lg font-bold text-foreground">{notifDetail.title}</h2>
-              <button type="button" onClick={() => setNotifDetail(null)} className="p-2 rounded-lg hover:bg-[var(--muted)] text-muted-foreground">×</button>
+          <div
+            className={cn(
+              "bg-[var(--card)] rounded-3xl border-2 shadow-2xl max-w-lg w-full max-h-[85vh] overflow-hidden flex flex-col",
+              notifDetail.type === 'comment' && "border-blue-500/30",
+              notifDetail.type === 'user' && "border-emerald-500/30",
+              notifDetail.type === 'purchase' && "border-amber-500/30",
+              notifDetail.type === 'topup' && "border-violet-500/30"
+            )}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className={cn(
+              "px-6 py-5 flex items-center justify-between",
+              notifDetail.type === 'comment' && "bg-blue-500/10",
+              notifDetail.type === 'user' && "bg-emerald-500/10",
+              notifDetail.type === 'purchase' && "bg-amber-500/10",
+              notifDetail.type === 'topup' && "bg-violet-500/10"
+            )}>
+              <div className="flex items-center gap-3">
+                <span className={cn(
+                  "w-12 h-12 rounded-2xl flex items-center justify-center",
+                  notifTypeStyle[notifDetail.type] || "bg-[var(--muted)]"
+                )}>
+                  {notifTypeIcon[notifDetail.type] ?? <Bell size={20} />}
+                </span>
+                <h2 className="text-lg font-bold text-foreground">{notifDetail.title}</h2>
+              </div>
+              <button type="button" onClick={() => setNotifDetail(null)} className="p-2 rounded-xl hover:bg-black/10 text-foreground">×</button>
             </div>
-            <div className="p-6 space-y-4">
-              <p className="text-foreground">{notifDetail.body}</p>
-              <p className="text-xs text-muted-foreground">{new Date(notifDetail.created_at).toLocaleString('ru-RU')}</p>
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              <p className="text-foreground leading-relaxed">{notifDetail.body}</p>
+              <p className="text-xs text-muted-foreground">{new Date(notifDetail.created_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })}</p>
               {notifDetail.type === 'purchase' && notifDetail.payload && (() => {
                 try {
                   const p = JSON.parse(notifDetail.payload as string) as { displayName?: string; username?: string; productNames?: string[]; total?: number; balanceAfter?: number; purchasedAt?: string };
                   return (
-                    <div className="rounded-xl border border-[var(--border)] overflow-hidden">
-                      <table className="w-full text-sm text-left">
-                        <tbody className="divide-y divide-[var(--border)]">
-                          <tr><td className="px-4 py-2 font-bold text-muted-foreground w-36">Кто</td><td className="px-4 py-2 text-foreground">{p.displayName || p.username || '—'}</td></tr>
-                          <tr><td className="px-4 py-2 font-bold text-muted-foreground">Что купил</td><td className="px-4 py-2 text-foreground">{Array.isArray(p.productNames) && p.productNames.length ? p.productNames.join(', ') : '—'}</td></tr>
-                          <tr><td className="px-4 py-2 font-bold text-muted-foreground">Сумма</td><td className="px-4 py-2 text-foreground">{p.total != null ? `${p.total} ₽` : '—'}</td></tr>
-                          <tr><td className="px-4 py-2 font-bold text-muted-foreground">Баланс после</td><td className="px-4 py-2 text-foreground">{p.balanceAfter != null ? `${p.balanceAfter} ₽` : '—'}</td></tr>
-                          <tr><td className="px-4 py-2 font-bold text-muted-foreground">Когда</td><td className="px-4 py-2 text-foreground">{p.purchasedAt ? new Date(p.purchasedAt).toLocaleString('ru-RU') : '—'}</td></tr>
-                        </tbody>
-                      </table>
+                    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-3">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Детали</h4>
+                      <dl className="grid gap-2 text-sm">
+                        <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Кто</dt><dd className="font-medium">{p.displayName || p.username || '—'}</dd></div>
+                        <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Товары</dt><dd className="font-medium">{Array.isArray(p.productNames) && p.productNames.length ? p.productNames.join(', ') : '—'}</dd></div>
+                        <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Сумма</dt><dd className="font-bold">{p.total != null ? `${p.total} ₽` : '—'}</dd></div>
+                        {p.balanceAfter != null && <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Баланс после</dt><dd>{p.balanceAfter} ₽</dd></div>}
+                        <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Когда</dt><dd>{p.purchasedAt ? new Date(p.purchasedAt).toLocaleString('ru-RU') : '—'}</dd></div>
+                      </dl>
                     </div>
                   );
                 } catch { return null; }
               })()}
             </div>
-            <div className="p-6 border-t border-[var(--border)] flex gap-3 justify-end">
-              <button type="button" onClick={() => setNotifDetail(null)} className="px-4 py-2 rounded-xl border border-[var(--border)] hover:bg-[var(--muted)] font-medium text-foreground">Закрыть</button>
+            <div className="p-6 border-t border-[var(--border)] flex gap-3 justify-end bg-[var(--muted)]/20">
+              <button type="button" onClick={() => setNotifDetail(null)} className="px-5 py-2.5 rounded-xl border border-[var(--border)] hover:bg-[var(--muted)] font-medium text-foreground">Закрыть</button>
               {notifDetail.link && (
-                <Link to={notifDetail.link} onClick={() => setNotifDetail(null)} className="px-4 py-2 rounded-xl bg-primary text-white font-bold hover:bg-primary/90">Перейти</Link>
+                <Link to={notifDetail.link} onClick={() => setNotifDetail(null)} className="px-5 py-2.5 rounded-xl bg-primary text-white font-bold hover:bg-primary/90">Перейти</Link>
               )}
             </div>
           </div>

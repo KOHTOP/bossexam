@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShoppingCart, X, Search as SearchIcon } from 'lucide-react';
+import { ShoppingCart, X, Search as SearchIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { authFetch } from '../lib/auth';
 import { cn } from '../lib/utils';
@@ -14,6 +14,8 @@ interface Product {
   image: string;
   category?: string;
   is_pinned?: number | boolean;
+  carousel_order?: number | null;
+  badge?: string | null;
 }
 
 interface CartItem extends Product {
@@ -31,6 +33,8 @@ export const ProductsPage: React.FC = () => {
   const [categoryFilter, setCategoryFilter] = useState<string>('');
   const [categories, setCategories] = useState<string[]>([]);
   const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
+  const carouselScrollRef = useRef<HTMLDivElement>(null);
+  const [carouselIndex, setCarouselIndex] = useState(0);
 
   useEffect(() => {
     fetchProducts();
@@ -125,11 +129,17 @@ export const ProductsPage: React.FC = () => {
     const matchCategory = !categoryFilter || (p.category || '') === categoryFilter;
     return matchSearch && matchCategory;
   });
+  const carouselProducts = filteredProducts.filter((p: Product) => p.carousel_order != null).sort((a: Product, b: Product) => (a.carousel_order ?? 0) - (b.carousel_order ?? 0));
   const pinnedProducts = filteredProducts.filter(p => p.is_pinned);
   const restProducts = filteredProducts.filter(p => !p.is_pinned);
 
   const productImageSrc = (img: string | undefined) =>
     !img ? '' : img.startsWith('http') || img.startsWith('/') ? img : `/uploads/${img}`;
+
+  const badgeLabel = (badge: string | null | undefined) =>
+    !badge ? null : badge === 'discount' ? 'Скидка' : badge === 'new' ? 'Новинка' : badge === 'hit' ? 'Хит' : badge;
+  const badgeClass = (badge: string | null | undefined) =>
+    !badge ? '' : badge === 'discount' ? 'bg-red-500 text-white' : badge === 'new' ? 'bg-green-500 text-white' : badge === 'hit' ? 'bg-amber-500 text-white' : 'bg-[var(--muted)] text-foreground';
 
   return (
     <div className="space-y-8">
@@ -191,6 +201,121 @@ export const ProductsPage: React.FC = () => {
         <div className="flex items-center justify-center h-64">Загрузка товаров...</div>
       ) : (
         <>
+          {carouselProducts.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="text-lg font-bold text-foreground">Рекомендуем</h2>
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-1.5">
+                    {carouselProducts.map((_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => {
+                          const el = carouselScrollRef.current;
+                          if (el) {
+                            const step = 280 + 24;
+                            el.scrollTo({ left: i * step, behavior: 'smooth' });
+                            setCarouselIndex(i);
+                          }
+                        }}
+                        className={cn(
+                          'w-2.5 h-2.5 rounded-full transition-all',
+                          i === carouselIndex ? 'bg-primary scale-110' : 'bg-[var(--border)] hover:bg-primary/50'
+                        )}
+                        aria-label={`Слайд ${i + 1}`}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => carouselScrollRef.current?.scrollBy({ left: -(280 + 24), behavior: 'smooth' })}
+                      className="p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--muted)] hover:border-primary/30 transition-colors"
+                      aria-label="Назад"
+                    >
+                      <ChevronLeft size={22} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => carouselScrollRef.current?.scrollBy({ left: 280 + 24, behavior: 'smooth' })}
+                      className="p-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--muted)] hover:border-primary/30 transition-colors"
+                      aria-label="Вперёд"
+                    >
+                      <ChevronRight size={22} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div
+                ref={carouselScrollRef}
+                className="overflow-x-auto overflow-y-hidden pb-4 -mx-2 snap-x snap-mandatory scroll-smooth"
+                style={{ scrollbarGutter: 'stable' }}
+                onScroll={() => {
+                  const el = carouselScrollRef.current;
+                  if (!el || carouselProducts.length === 0) return;
+                  const step = 280 + 24;
+                  const idx = Math.round(el.scrollLeft / step);
+                  setCarouselIndex(Math.min(idx, carouselProducts.length - 1));
+                }}
+                onWheel={(e) => {
+                  const el = carouselScrollRef.current;
+                  if (!el || e.ctrlKey || e.metaKey) return;
+                  const maxScroll = el.scrollWidth - el.clientWidth;
+                  if (maxScroll <= 0) return;
+                  if (el.scrollLeft <= 0 && e.deltaY < 0) return;
+                  if (el.scrollLeft >= maxScroll && e.deltaY > 0) return;
+                  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                    e.preventDefault();
+                    el.scrollLeft += e.deltaY;
+                  }
+                }}
+              >
+                <div className="flex gap-6 min-w-max px-2">
+                  {carouselProducts.map((product) => (
+                    <Link
+                      key={product.id}
+                      to={`/products/${product.id}`}
+                      className="shrink-0 w-[280px] snap-center snap-always"
+                    >
+                      <motion.div
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="bg-[var(--card)] rounded-2xl overflow-hidden flex flex-col shadow-lg border border-[var(--border)] group h-full hover:border-primary/50 hover:shadow-xl hover:shadow-primary/10 transition-all cursor-pointer"
+                      >
+                        <div className="relative w-full aspect-[4/3] overflow-hidden bg-[var(--muted)] flex items-center justify-center shrink-0">
+                          {productImageSrc(product.image) ? (
+                            <img src={productImageSrc(product.image)} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                          ) : (
+                            <div className="text-muted-foreground font-black text-center text-sm uppercase tracking-tighter">Картинка товара</div>
+                          )}
+                          {product.badge && (
+                            <span className={cn('absolute top-2 left-2 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider shadow-sm', badgeClass(product.badge))}>
+                              {badgeLabel(product.badge)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="p-4 space-y-2 flex-1 flex flex-col min-w-0">
+                          {product.category && (
+                            <span className="inline-block px-2 py-0.5 rounded-lg bg-[var(--muted)] text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-fit">
+                              {product.category}
+                            </span>
+                          )}
+                          <h3 className="text-foreground font-bold text-sm line-clamp-2 leading-snug">
+                            {product.name}
+                          </h3>
+                          <div className="w-full bg-primary text-white py-3 rounded-xl font-bold text-sm text-center group-hover:bg-primary/90 transition-colors mt-auto">
+                            {product.price} ₽
+                          </div>
+                        </div>
+                      </motion.div>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           {pinnedProducts.length > 0 && (
             <div className="space-y-4">
               <h2 className="text-lg font-bold text-foreground border-b border-[var(--border)] pb-2">Закреплённые товары</h2>
@@ -202,13 +327,18 @@ export const ProductsPage: React.FC = () => {
                       animate={{ opacity: 1, scale: 1 }}
                       className="bg-[var(--card)] rounded-2xl p-2 flex flex-col shadow-xl border border-primary/40 group h-full hover:border-primary/30 transition-colors cursor-pointer"
                     >
-                      <div className="w-full aspect-square rounded-xl overflow-hidden bg-[var(--muted)] flex items-center justify-center shrink-0">
+                      <div className="relative w-full aspect-square rounded-xl overflow-hidden bg-[var(--muted)] flex items-center justify-center shrink-0">
                         {productImageSrc(product.image) ? (
                           <img src={productImageSrc(product.image)} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                         ) : (
                           <div className="text-muted-foreground font-black text-center text-sm uppercase tracking-tighter">
                             Картинка товара
                           </div>
+                        )}
+                        {product.badge && (
+                          <span className={cn('absolute top-2 left-2 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider', badgeClass(product.badge))}>
+                            {badgeLabel(product.badge)}
+                          </span>
                         )}
                       </div>
                       <div className="px-3 pb-3 pt-2 space-y-2 flex-1 flex flex-col min-w-0">
@@ -241,13 +371,18 @@ export const ProductsPage: React.FC = () => {
                   animate={{ opacity: 1, scale: 1 }}
                   className="bg-[var(--card)] rounded-2xl p-2 flex flex-col shadow-xl border border-[var(--border)] group h-full hover:border-primary/30 transition-colors cursor-pointer"
                 >
-                  <div className="w-full aspect-square rounded-xl overflow-hidden bg-[var(--muted)] flex items-center justify-center shrink-0">
+                  <div className="relative w-full aspect-square rounded-xl overflow-hidden bg-[var(--muted)] flex items-center justify-center shrink-0">
                     {productImageSrc(product.image) ? (
                       <img src={productImageSrc(product.image)} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                     ) : (
                       <div className="text-muted-foreground font-black text-center text-sm uppercase tracking-tighter">
                         Картинка товара
                       </div>
+                    )}
+                    {product.badge && (
+                      <span className={cn('absolute top-2 left-2 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider', badgeClass(product.badge))}>
+                        {badgeLabel(product.badge)}
+                      </span>
                     )}
                   </div>
                   <div className="px-3 pb-3 pt-2 space-y-2 flex-1 flex flex-col min-w-0">

@@ -72,6 +72,40 @@ export const ArticlePage: React.FC = () => {
     : undefined;
   useDocumentHead(article?.title ?? 'Статья', descFromContent);
 
+  useEffect(() => {
+    if (!article) {
+      const el = document.getElementById('ld-json-article');
+      if (el) el.remove();
+      return;
+    }
+    const base = window.location.origin;
+    const articleUrl = `${base}/article/${article.slug}`;
+    const data = {
+      '@context': 'https://schema.org',
+      '@type': 'Article',
+      headline: article.title,
+      description: descFromContent || undefined,
+      datePublished: article.created_at || undefined,
+      dateModified: article.updated_at || article.created_at || undefined,
+      author: { '@type': 'Person', name: article.author || 'BossExam' },
+      publisher: { '@type': 'Organization', name: 'BossExam', url: base },
+      mainEntityOfPage: { '@type': 'WebPage', '@id': articleUrl },
+      url: articleUrl,
+    };
+    let el = document.getElementById('ld-json-article') as HTMLScriptElement | null;
+    if (!el) {
+      el = document.createElement('script');
+      el.id = 'ld-json-article';
+      el.type = 'application/ld+json';
+      document.head.appendChild(el);
+    }
+    el.textContent = JSON.stringify(data);
+    return () => {
+      const script = document.getElementById('ld-json-article');
+      if (script) script.remove();
+    };
+  }, [article, descFromContent]);
+
   const refreshCaptcha = async () => {
     try {
       const res = await fetch('/api/captcha');

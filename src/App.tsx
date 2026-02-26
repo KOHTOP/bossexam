@@ -14,8 +14,10 @@ import { ProductsPage } from './pages/ProductsPage';
 import { ProductDetailPage } from './pages/ProductDetailPage';
 import { TopUpPage } from './pages/TopUpPage';
 import { TopUpSuccessPage } from './pages/TopUpSuccessPage';
+import { DeliveryPage } from './pages/DeliveryPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { ReviewsPage } from './pages/ReviewsPage';
+import { ContactsPage } from './pages/ContactsPage';
 
 export default function App() {
   return (
@@ -31,12 +33,14 @@ export default function App() {
               <Route path="/auth" element={<AuthPage />} />
               <Route path="/privacy" element={<PrivacyPage />} />
               <Route path="/terms" element={<TermsPage />} />
+              <Route path="/contacts" element={<ContactsPage />} />
               <Route path="/author/:username" element={<AuthorProfilePage />} />
               <Route path="/products" element={<ProductsPage />} />
               <Route path="/products/:id" element={<ProductDetailPage />} />
               <Route path="/reviews" element={<ReviewsPage />} />
               <Route path="/topup" element={<TopUpPage />} />
               <Route path="/topup/success" element={<TopUpSuccessPage />} />
+              <Route path="/delivery/:token" element={<DeliveryPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
             </Routes>
           </Layout>

@@ -302,3 +302,26 @@ input[type="number"] {
 .admin-sidebar-scroll::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* Ползунок панели уведомлений и списков в стиле сайта */
+.notif-panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.notif-panel-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.notif-panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+.notif-panel-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+.notif-panel-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
+.notif-panel-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}

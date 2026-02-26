@@ -9,7 +9,7 @@ import {
   Image as ImageIcon, LogOut, Lock, User, Heading1, Heading2, Heading3, Code, Minus, Table as TableIcon, 
   BarChart3, Settings, FileText, Upload, CheckCircle2, AlertCircle,
   Users as UsersIcon, Eye, Key, MessageSquare, Check, Ban, Search as SearchIcon, ShoppingCart,
-  Webhook, Copy, CheckCircle, ChevronLeft, ChevronRight, Star, Menu, LayoutDashboard
+  Webhook, Copy, CheckCircle,   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Star, Menu, LayoutDashboard
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -26,6 +26,8 @@ interface AdminProduct {
   tags?: string;
   created_at: string;
   is_pinned?: number | boolean;
+  carousel_order?: number | null;
+  badge?: string | null;
 }
 
 interface AdminUser {
@@ -111,7 +113,7 @@ export const AdminPage: React.FC = () => {
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [isEditingProduct, setIsEditingProduct] = useState<AdminProduct | null>(null);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
-  const [newProduct, setNewProduct] = useState({ name: '', description: '', price: 0, image: '', category: 'Общее', delivery_content: '', tags: '' });
+  const [newProduct, setNewProduct] = useState({ name: '', description: '', price: 0, image: '', category: 'Общее', delivery_content: '', tags: '', carousel_order: null as number | null, badge: '' });
   const [userSearch, setUserSearch] = useState('');
   const [articleSearch, setArticleSearch] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -145,6 +147,8 @@ export const AdminPage: React.FC = () => {
   const [plategaSecret, setPlategaSecret] = useState('');
   const [plategaBaseUrl, setPlategaBaseUrl] = useState('');
   const [plategaWebhookSecret, setPlategaWebhookSecret] = useState('');
+  const [plategaDemo, setPlategaDemo] = useState(false);
+  const [telegramBotName, setTelegramBotName] = useState('');
   const [paymentLog, setPaymentLog] = useState<{ items: any[]; total: number; page: number; totalPages: number }>({ items: [], total: 0, page: 1, totalPages: 0 });
   const [paymentLogPage, setPaymentLogPage] = useState(1);
   const [replyToId, setReplyToId] = useState<number | null>(null);
@@ -298,6 +302,8 @@ export const AdminPage: React.FC = () => {
     fetch('/api/settings/platega_secret').then(res => res.json()).then(data => setPlategaSecret(data.value || ''));
     fetch('/api/settings/platega_base_url').then(res => res.json()).then(data => setPlategaBaseUrl(data.value || ''));
     fetch('/api/settings/platega_webhook_secret').then(res => res.json()).then(data => setPlategaWebhookSecret(data.value || ''));
+    fetch('/api/settings/platega_demo').then(res => res.json()).then(data => setPlategaDemo(data.value === '1' || data.value === 'true'));
+    fetch('/api/settings/telegram_bot_name').then(res => res.json()).then(data => setTelegramBotName(data.value || ''));
   };
 
   const fetchPaymentLog = (page: number) => {
@@ -446,20 +452,20 @@ export const AdminPage: React.FC = () => {
   const handleSaveProduct = async () => {
     const method = isEditingProduct ? 'PUT' : 'POST';
     const url = isEditingProduct ? `/api/admin/products/${isEditingProduct.id}` : '/api/admin/products';
-    const body = isEditingProduct 
-      ? { ...isEditingProduct, category: isEditingProduct.category || 'Общее', tags: isEditingProduct.tags || '' } 
-      : { ...newProduct, category: newProduct.category || 'Общее', tags: newProduct.tags || '' };
+    const payload = isEditingProduct
+      ? { ...isEditingProduct, category: isEditingProduct.category || 'Общее', tags: isEditingProduct.tags || '', carousel_order: isEditingProduct.carousel_order ?? null, badge: isEditingProduct.badge || null }
+      : { ...newProduct, category: newProduct.category || 'Общее', tags: newProduct.tags || '', carousel_order: newProduct.carousel_order ?? null, badge: newProduct.badge || null };
 
     try {
       const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(payload)
       });
       if (res.ok) {
         setIsEditingProduct(null);
         setIsCreatingProduct(false);
-        setNewProduct({ name: '', description: '', price: 0, image: '', category: 'Общее', delivery_content: '', tags: '' });
+        setNewProduct({ name: '', description: '', price: 0, image: '', category: 'Общее', delivery_content: '', tags: '', carousel_order: null, badge: '' });
         fetchProducts();
       }
     } catch (err) {
@@ -471,9 +477,30 @@ export const AdminPage: React.FC = () => {
     if (!confirm('Удалить этот товар?')) return;
     try {
       const res = await authFetch(`/api/admin/products/${id}`, { method: 'DELETE' });
-      if (res.ok) fetchProducts();
+      if (res.ok) {
+        setIsEditingProduct(prev => (prev?.id === id ? null : prev));
+        await fetchProducts();
+      } else if (res.status === 401) {
+        alert('Сессия истекла. Войдите снова.');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Ошибка при удалении');
+      }
     } catch (err) {
       alert('Ошибка при удалении');
+    }
+  };
+
+  const handleProductReorder = async (id: number, direction: 'up' | 'down') => {
+    try {
+      const res = await authFetch(`/api/admin/products/${id}/reorder`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction })
+      });
+      if (res.ok) fetchProducts();
+    } catch (err) {
+      alert('Ошибка при изменении порядка');
     }
   };
 
@@ -1539,44 +1566,58 @@ export const AdminPage: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {products.map(p => (
-                <div key={p.id} className="bg-[var(--card)] rounded-3xl border border-[var(--border)] overflow-hidden shadow-sm flex flex-col">
-                  <div className="aspect-video bg-white flex items-center justify-center p-4">
-                    {p.image ? (
-                      <img src={p.image} alt={p.name} className="w-full h-full object-contain" />
-                    ) : (
-                      <div className="text-black font-black text-center text-xl uppercase tracking-tighter">КАРТИНКА</div>
-                    )}
-                  </div>
-                  <div className="p-6 space-y-4 flex-1 flex flex-col">
-                    <div className="flex-1">
-                      <h3 className="font-bold text-lg uppercase tracking-tight">{p.name}</h3>
-                      {(p as any).category && (
-                        <span className="inline-block mt-2 px-2.5 py-1 rounded-lg bg-[var(--muted)] text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                          {(p as any).category}
-                        </span>
-                      )}
-                      <p className="text-sm text-muted-foreground line-clamp-2 mt-2">{p.description}</p>
-                      <p className="text-xl font-black text-primary mt-2">{p.price} ₽</p>
-                    </div>
-                    <div className="flex gap-2 pt-4 border-t border-[var(--border)]">
-                      <button 
-                        onClick={() => setIsEditingProduct(p)}
-                        className="flex-1 py-2 rounded-xl bg-[var(--muted)] text-foreground font-bold text-xs uppercase hover:bg-[var(--border)] transition-all"
-                      >
-                        Изменить
-                      </button>
-                      <button 
-                        onClick={() => handleDeleteProduct(p.id)}
-                        className="flex-1 py-2 rounded-xl bg-red-500/10 text-red-500 font-bold text-xs uppercase hover:bg-red-500 hover:text-white transition-all"
-                      >
-                        Удалить
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="bg-[var(--card)] rounded-3xl border border-[var(--border)] overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] bg-[var(--muted)]/30">
+                      <th className="p-3 text-xs font-bold uppercase tracking-wider text-muted-foreground w-16">Фото</th>
+                      <th className="p-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Название</th>
+                      <th className="p-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Категория</th>
+                      <th className="p-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Цена</th>
+                      <th className="p-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Карусель</th>
+                      <th className="p-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Эффект</th>
+                      <th className="p-3 text-xs font-bold uppercase tracking-wider text-muted-foreground w-24">Порядок</th>
+                      <th className="p-3 text-xs font-bold uppercase tracking-wider text-muted-foreground w-40">Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {products.map(p => (
+                      <tr key={p.id} className="border-b border-[var(--border)] hover:bg-[var(--muted)]/20 transition-colors">
+                        <td className="p-3">
+                          <div className="w-12 h-12 rounded-xl bg-[var(--muted)] overflow-hidden flex items-center justify-center shrink-0">
+                            {p.image ? (
+                              <img src={p.image.startsWith('http') || p.image.startsWith('/') ? p.image : `/uploads/${p.image}`} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-[10px] font-black text-muted-foreground">—</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3 font-bold text-sm">{p.name}</td>
+                        <td className="p-3 text-sm text-muted-foreground">{(p as any).category || '—'}</td>
+                        <td className="p-3 font-bold text-primary">{p.price} ₽</td>
+                        <td className="p-3 text-sm">{p.carousel_order != null ? `#${p.carousel_order + 1}` : '—'}</td>
+                        <td className="p-3 text-sm">{p.badge ? (p.badge === 'discount' ? 'Скидка' : p.badge === 'new' ? 'Новинка' : p.badge === 'hit' ? 'Хит' : p.badge) : '—'}</td>
+                        <td className="p-3">
+                          <div className="flex gap-1">
+                            <button type="button" onClick={() => handleProductReorder(p.id, 'up')} className="p-1.5 rounded-lg border border-[var(--border)] hover:bg-[var(--muted)] transition-colors" title="Выше"><ChevronUp size={16} /></button>
+                            <button type="button" onClick={() => handleProductReorder(p.id, 'down')} className="p-1.5 rounded-lg border border-[var(--border)] hover:bg-[var(--muted)] transition-colors" title="Ниже"><ChevronDown size={16} /></button>
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex gap-2">
+                            <button onClick={() => setIsEditingProduct(p)} className="py-2 px-3 rounded-xl bg-[var(--muted)] text-foreground font-bold text-xs uppercase hover:bg-[var(--border)] transition-all">Изменить</button>
+                            <button onClick={() => handleDeleteProduct(p.id)} className="py-2 px-3 rounded-xl bg-red-500/10 text-red-500 font-bold text-xs uppercase hover:bg-red-500 hover:text-white transition-all">Удалить</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {products.length === 0 && (
+                <div className="p-12 text-center text-muted-foreground font-medium">Товаров пока нет. Нажмите «Добавить товар».</div>
+              )}
             </div>
           </div>
         )}
@@ -1784,6 +1825,15 @@ export const AdminPage: React.FC = () => {
                     onChange={e => setPlategaWebhookSecret(e.target.value)}
                   />
                 </div>
+                <label className="flex items-center gap-2 cursor-pointer md:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={plategaDemo}
+                    onChange={e => setPlategaDemo(e.target.checked)}
+                    className="rounded border-[var(--border)]"
+                  />
+                  <span className="text-sm font-medium">Демо-режим — оплата товара без списания (выдача по ссылке без реального платежа)</span>
+                </label>
               </div>
               <button
                 onClick={() => {
@@ -1792,6 +1842,7 @@ export const AdminPage: React.FC = () => {
                     authFetch('/api/admin/settings/platega_secret', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaSecret }) }),
                     authFetch('/api/admin/settings/platega_base_url', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaBaseUrl }) }),
                     authFetch('/api/admin/settings/platega_webhook_secret', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaWebhookSecret }) }),
+                    authFetch('/api/admin/settings/platega_demo', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: plategaDemo ? '1' : '0' }) }),
                   ]).then(() => alert('Сохранено'));
                 }}
                 className="bg-primary text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-primary/90 transition-all"
@@ -1868,6 +1919,26 @@ export const AdminPage: React.FC = () => {
 
         {activeTab === 'settings' && (
           <div className="space-y-8">
+            <div className="bg-[var(--card)] p-8 rounded-3xl border border-[var(--border)] shadow-sm space-y-6">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <h3 className="text-xl font-bold font-display">Вход через Telegram</h3>
+                <button 
+                  onClick={() => handleSaveSettings('telegram_bot_name', telegramBotName)}
+                  className="bg-primary text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-primary/90 transition-all"
+                >
+                  Сохранить
+                </button>
+              </div>
+              <p className="text-sm text-muted-foreground">Имя бота (без @) — если задано, на странице входа отображается кнопка «Войти через Telegram». Можно задать в .env как TELEGRAM_BOT_NAME или здесь.</p>
+              <input
+                type="text"
+                placeholder="например: MySiteBot"
+                className="w-full max-w-md p-4 rounded-2xl border border-[var(--border)] bg-[var(--background)] text-lg font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                value={telegramBotName}
+                onChange={e => setTelegramBotName(e.target.value)}
+              />
+            </div>
+
             <div className="bg-[var(--card)] p-8 rounded-3xl border border-[var(--border)] shadow-sm space-y-6">
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <h3 className="text-xl font-bold font-display">Минимальная сумма пополнения (₽)</h3>
@@ -2196,17 +2267,53 @@ export const AdminPage: React.FC = () => {
                     placeholder="Ссылка на скачивание или текст..."
                   />
                 </div>
-                {isEditingProduct && (
+                <div className="flex flex-wrap gap-6 items-end">
+                  {isEditingProduct && (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!isEditingProduct.is_pinned}
+                        onChange={e => setIsEditingProduct({...isEditingProduct, is_pinned: e.target.checked})}
+                        className="rounded border-[var(--border)]"
+                      />
+                      <span className="text-sm font-medium">Закрепить товар (показывать вверху)</span>
+                    </label>
+                  )}
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={!!isEditingProduct.is_pinned}
-                      onChange={e => setIsEditingProduct({...isEditingProduct, is_pinned: e.target.checked})}
+                      checked={isEditingProduct ? isEditingProduct.carousel_order != null : newProduct.carousel_order != null}
+                      onChange={e => {
+                        const inCarousel = e.target.checked;
+                        const maxOrder = Math.max(0, ...products.filter(x => x.carousel_order != null).map(x => x.carousel_order!));
+                        if (isEditingProduct) {
+                          setIsEditingProduct({ ...isEditingProduct, carousel_order: inCarousel ? (isEditingProduct.carousel_order ?? maxOrder + 1) : null });
+                        } else {
+                          setNewProduct({ ...newProduct, carousel_order: inCarousel ? maxOrder + 1 : null });
+                        }
+                      }}
                       className="rounded border-[var(--border)]"
                     />
-                    <span className="text-sm font-medium">Закрепить товар (показывать вверху)</span>
+                    <span className="text-sm font-medium">В карусели на странице товаров</span>
                   </label>
-                )}
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground ml-1">Эффект / бейдж</label>
+                    <select
+                      className="p-3 rounded-xl border border-[var(--border)] bg-[var(--background)] outline-none focus:ring-2 focus:ring-primary/20 text-sm min-w-[140px]"
+                      value={isEditingProduct ? (isEditingProduct.badge || '') : newProduct.badge}
+                      onChange={e => {
+                        const v = e.target.value || null;
+                        if (isEditingProduct) setIsEditingProduct({ ...isEditingProduct, badge: v });
+                        else setNewProduct({ ...newProduct, badge: v || '' });
+                      }}
+                    >
+                      <option value="">Нет</option>
+                      <option value="discount">Скидка</option>
+                      <option value="new">Новинка</option>
+                      <option value="hit">Хит</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
               <div className="p-6 border-t border-[var(--border)] flex justify-end gap-3 bg-[var(--muted)]/30">

@@ -141,12 +141,20 @@ addColumn('products', 'category', "TEXT DEFAULT 'Общее'");
 addColumn('products', 'delivery_content', "TEXT");
 addColumn('products', 'tags', "TEXT");
 addColumn('products', 'is_pinned', "INTEGER DEFAULT 0");
+addColumn('products', 'carousel_order', "INTEGER");
+addColumn('products', 'badge', "TEXT");
+addColumn('products', 'list_order', "INTEGER");
 addColumn('articles', 'is_pinned', "INTEGER DEFAULT 0");
 addColumn('articles', 'source_type', "TEXT");
 addColumn('articles', 'source_url', "TEXT");
 addColumn('comments', 'parent_id', "INTEGER REFERENCES comments(id) ON DELETE CASCADE");
 addColumn('notifications', 'payload', "TEXT");
 addColumn('users', 'created_at', "DATETIME");
+addColumn('payment_pending', 'product_id', "INTEGER");
+addColumn('users', 'telegram_id', "INTEGER");
+try {
+  db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)").run();
+} catch (_) {}
 
 // Ensure users.created_at exists (idempotent; SQLite ALTER doesn't allow CURRENT_TIMESTAMP default)
 try {
@@ -191,6 +199,18 @@ db.exec(`
     purchased_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS delivery_tokens (
+    token TEXT PRIMARY KEY,
+    product_id INTEGER NOT NULL,
+    delivery_content TEXT,
+    product_name TEXT,
+    user_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
   )
 `);
 
@@ -342,6 +362,68 @@ async function startServer() {
 
   app.post("/api/logout", (_req, res) => {
     res.json({ success: true });
+  });
+
+  function verifyTelegramAuth(payload: { id: number; first_name?: string; last_name?: string; username?: string; photo_url?: string; auth_date: number; hash: string }): boolean {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) return false;
+    const { hash, ...rest } = payload;
+    const dataCheckString = Object.keys(rest)
+      .sort()
+      .map((k) => `${k}=${(rest as any)[k]}`)
+      .join("\n");
+    const secretKey = crypto.createHash("sha256").update(botToken).digest();
+    const hmac = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
+    if (hmac !== hash) return false;
+    const maxAge = 86400;
+    if (Math.floor(Date.now() / 1000) - payload.auth_date > maxAge) return false;
+    return true;
+  }
+
+  app.post("/api/auth/telegram", (req: any, res: any) => {
+    const { id, first_name, last_name, username, photo_url, auth_date, hash } = req.body || {};
+    if (!id || !auth_date || !hash) {
+      return res.status(400).json({ error: "Неверные данные от Telegram" });
+    }
+    if (!verifyTelegramAuth({ id: Number(id), first_name, last_name, username, photo_url, auth_date: Number(auth_date), hash })) {
+      return res.status(400).json({ error: "Проверка подписи Telegram не прошла" });
+    }
+    const telegramId = Number(id);
+    const displayName = [first_name, last_name].filter(Boolean).join(" ").trim() || username || `User ${telegramId}`;
+    const baseUsername = (username && String(username).replace(/[^a-zA-Z0-9_]/g, "")) || `tg_${telegramId}`;
+    let finalUsername = baseUsername;
+    let n = 0;
+    while (db.prepare("SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND (telegram_id IS NULL OR telegram_id != ?)").get(finalUsername, telegramId)) {
+      n++;
+      finalUsername = `${baseUsername}_${n}`;
+    }
+    let user = db.prepare("SELECT * FROM users WHERE telegram_id = ?").get(telegramId) as any;
+    if (user) {
+      db.prepare(
+        "UPDATE users SET username = ?, display_name = ?, avatar = ?, telegram = ? WHERE id = ?"
+      ).run(finalUsername, displayName || user.display_name, photo_url || user.avatar, username || user.telegram || "", user.id);
+      user = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id) as any;
+    } else {
+      const placeholderPassword = bcrypt.hashSync(crypto.randomBytes(32).toString("hex"), 10);
+      try {
+        db.prepare(
+          "INSERT INTO users (username, password, display_name, avatar, telegram, telegram_id, role, created_at) VALUES (?, ?, ?, ?, ?, ?, 'user', datetime('now'))"
+        ).run(finalUsername, placeholderPassword, displayName, photo_url || null, username || null, telegramId);
+        const newId = db.prepare("SELECT last_insert_rowid() as id").get() as { id: number };
+        user = db.prepare("SELECT * FROM users WHERE id = ?").get(newId.id) as any;
+        createNotificationForAdmins("user", "Новый пользователь", `Зарегистрирован через Telegram: ${displayName} (@${username || "—"})`, "/admin");
+      } catch (e: any) {
+        if (e.message && e.message.includes("UNIQUE")) {
+          user = db.prepare("SELECT * FROM users WHERE telegram_id = ?").get(telegramId) as any;
+          if (user) {
+            db.prepare("UPDATE users SET username = ?, display_name = ?, avatar = ?, telegram = ? WHERE id = ?").run(finalUsername, displayName, photo_url, username, user.id);
+            user = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id) as any;
+          } else return res.status(400).json({ error: "Ошибка создания аккаунта" });
+        } else throw e;
+      }
+    }
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+    res.json({ success: true, user: toUserDto(user), token });
   });
 
   app.get("/api/me", (req: any, res: any) => {
@@ -561,6 +643,84 @@ async function startServer() {
     res.json({ value: setting?.value || "" });
   });
 
+  app.get("/api/config", (_req, res) => {
+    const telegramBotName = process.env.TELEGRAM_BOT_NAME || (db.prepare("SELECT value FROM settings WHERE key = ?").get("telegram_bot_name") as { value?: string } | undefined)?.value || "";
+    res.json({ telegramBotName });
+  });
+
+  const getBaseUrl = (req: express.Request) => {
+    const origin = process.env.SITE_URL || (req.protocol + "://" + req.get("host"));
+    return origin.replace(/\/$/, "");
+  };
+
+  const sitemapPath = path.join(__dirname, "public", "sitemap.xml");
+  function regenerateSitemapFile() {
+    try {
+      const base = (process.env.SITE_URL || "https://example.com").replace(/\/$/, "");
+      const articles = db.prepare("SELECT slug, created_at FROM articles ORDER BY created_at DESC").all() as { slug: string; created_at: string }[];
+      const staticPages = [
+        { path: "", priority: "1.0", changefreq: "daily" },
+        { path: "/products", priority: "0.9", changefreq: "daily" },
+        { path: "/reviews", priority: "0.8", changefreq: "weekly" },
+        { path: "/contacts", priority: "0.6", changefreq: "monthly" },
+        { path: "/privacy", priority: "0.3", changefreq: "monthly" },
+        { path: "/terms", priority: "0.3", changefreq: "monthly" },
+      ];
+      const lastmod = (d: string) => (d ? new Date(d).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
+      const url = (p: string, lm: string, pr: string, cf: string) =>
+        `  <url><loc>${base}${p}</loc><lastmod>${lm}</lastmod><changefreq>${cf}</changefreq><priority>${pr}</priority></url>`;
+      const xml =
+        '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+        staticPages.map((s) => url(s.path || "/", lastmod(""), s.priority, s.changefreq)).join("\n") +
+        "\n" +
+        articles.map((a) => url(`/article/${a.slug}`, lastmod(a.created_at), "0.8", "weekly")).join("\n") +
+        "\n</urlset>";
+      fs.writeFileSync(sitemapPath, xml, "utf8");
+    } catch (err) {
+      console.error("Failed to regenerate sitemap.xml:", err);
+    }
+  }
+
+  app.get("/robots.txt", (req, res) => {
+    const base = getBaseUrl(req);
+    res.type("text/plain");
+    res.send(
+      `User-agent: *\n` +
+      `Allow: /\n` +
+      `Disallow: /admin\n` +
+      `Disallow: /admin/\n` +
+      `Disallow: /auth\n` +
+      `Disallow: /api/\n` +
+      `Disallow: /topup\n` +
+      `Disallow: /notifications\n` +
+      `\nSitemap: ${base}/sitemap.xml\n`
+    );
+  });
+
+  app.get("/sitemap.xml", (req, res) => {
+    const base = getBaseUrl(req);
+    const articles = db.prepare("SELECT slug, created_at FROM articles ORDER BY created_at DESC").all() as { slug: string; created_at: string }[];
+    const staticPages = [
+      { path: "", priority: "1.0", changefreq: "daily" },
+      { path: "/products", priority: "0.9", changefreq: "daily" },
+      { path: "/reviews", priority: "0.8", changefreq: "weekly" },
+      { path: "/contacts", priority: "0.6", changefreq: "monthly" },
+      { path: "/privacy", priority: "0.3", changefreq: "monthly" },
+      { path: "/terms", priority: "0.3", changefreq: "monthly" },
+    ];
+    const lastmod = (d: string) => (d ? new Date(d).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
+    const url = (path: string, lm: string, pr: string, cf: string) =>
+      `  <url><loc>${base}${path}</loc><lastmod>${lm}</lastmod><changefreq>${cf}</changefreq><priority>${pr}</priority></url>`;
+    const xml =
+      '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+      staticPages.map((p) => url(p.path || "/", lastmod(""), p.priority, p.changefreq)).join("\n") +
+      "\n" +
+      articles.map((a) => url(`/article/${a.slug}`, lastmod(a.created_at), "0.8", "weekly")).join("\n") +
+      "\n</urlset>";
+    res.type("application/xml");
+    res.send(xml);
+  });
+
   // Admin Routes
   app.post("/api/admin/articles", isAdmin, (req, res) => {
     const { title, content, category, author, source_type, source_url } = req.body;
@@ -580,6 +740,7 @@ async function startServer() {
         "INSERT INTO articles (title, slug, content, category, author, source_type, source_url) VALUES (?, ?, ?, ?, ?, ?, ?)"
       ).run(title, finalSlug, content, category || 'Общее', author || 'Администратор', st, su);
       const id = db.prepare("SELECT last_insert_rowid() as id").get() as { id: number };
+      regenerateSitemapFile();
       res.json({ id: id.id, slug: finalSlug });
     } catch (err) {
       res.status(400).json({ error: "Ошибка при создании статьи" });
@@ -600,6 +761,7 @@ async function startServer() {
       db.prepare(
         "UPDATE articles SET title = ?, slug = ?, content = ?, category = ?, author = ?, is_pinned = ?, source_type = ?, source_url = ? WHERE id = ?"
       ).run(title, slug, content, category, author, is_pinned ? 1 : 0, st, su, req.params.id);
+      regenerateSitemapFile();
       res.json({ success: true });
     } catch (err) {
       res.status(400).json({ error: "Ошибка при обновлении статьи" });
@@ -608,6 +770,7 @@ async function startServer() {
 
   app.delete("/api/admin/articles/:id", isAdmin, (req, res) => {
     db.prepare("DELETE FROM articles WHERE id = ?").run(req.params.id);
+    regenerateSitemapFile();
     res.json({ success: true });
   });
 
@@ -621,7 +784,16 @@ async function startServer() {
     merchant: getSetting("platega_merchant_id", "") || process.env.PLATEGA_MERCHANT_ID || "",
     secret: getSetting("platega_secret", "") || process.env.PLATEGA_SECRET || "",
     webhookSecret: getSetting("platega_webhook_secret", "") || process.env.PLATEGA_WEBHOOK_SECRET || "",
+    demo: getSetting("platega_demo", "") === "1",
   });
+
+  const createDeliveryToken = (productId: number, userId: number | null): string | null => {
+    const product = db.prepare("SELECT id, name, delivery_content FROM products WHERE id = ?").get(productId) as { id: number; name: string; delivery_content: string | null } | undefined;
+    if (!product) return null;
+    const token = crypto.randomBytes(24).toString("hex");
+    db.prepare("INSERT INTO delivery_tokens (token, product_id, delivery_content, product_name, user_id) VALUES (?, ?, ?, ?, ?)").run(token, productId, product.delivery_content ?? null, product.name, userId);
+    return token;
+  };
 
   app.put("/api/admin/settings/:key", isAdmin, (req, res) => {
     const { value } = req.body;
@@ -706,7 +878,12 @@ async function startServer() {
 
   // Products API
   app.get("/api/products", (req, res) => {
-    const products = db.prepare("SELECT * FROM products ORDER BY is_pinned DESC, created_at DESC").all();
+    const products = db.prepare("SELECT * FROM products ORDER BY (carousel_order IS NULL), carousel_order ASC, (list_order IS NULL), list_order ASC, is_pinned DESC, id ASC").all();
+    res.json(products);
+  });
+
+  app.get("/api/products/carousel", (req, res) => {
+    const products = db.prepare("SELECT * FROM products WHERE carousel_order IS NOT NULL ORDER BY carousel_order ASC").all();
     res.json(products);
   });
 
@@ -722,9 +899,9 @@ async function startServer() {
   });
 
   app.post("/api/admin/products", isAdmin, (req, res) => {
-    const { name, description, price, image, category, delivery_content, tags } = req.body;
+    const { name, description, price, image, category, delivery_content, tags, carousel_order, badge } = req.body;
     try {
-      const info = db.prepare("INSERT INTO products (name, description, price, image, category, delivery_content, tags) VALUES (?, ?, ?, ?, ?, ?, ?)").run(name, description, price, image, category || 'Общее', delivery_content || null, tags || null);
+      const info = db.prepare("INSERT INTO products (name, description, price, image, category, delivery_content, tags, carousel_order, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(name, description, price, image, category || 'Общее', delivery_content || null, tags || null, carousel_order != null ? parseInt(carousel_order, 10) : null, badge || null);
       res.json({ id: info.lastInsertRowid });
     } catch (err) {
       res.status(400).json({ error: "Ошибка при создании товара" });
@@ -732,13 +909,45 @@ async function startServer() {
   });
 
   app.put("/api/admin/products/:id", isAdmin, (req, res) => {
-    const { name, description, price, image, category, delivery_content, tags, is_pinned } = req.body;
+    const { name, description, price, image, category, delivery_content, tags, is_pinned, carousel_order, badge } = req.body;
     try {
-      db.prepare("UPDATE products SET name = ?, description = ?, price = ?, image = ?, category = ?, delivery_content = ?, tags = ?, is_pinned = ? WHERE id = ?").run(name, description, price, image, category || 'Общее', delivery_content || null, tags || null, is_pinned ? 1 : 0, req.params.id);
+      const co = carousel_order === '' || carousel_order === undefined || carousel_order === null ? null : parseInt(carousel_order, 10);
+      db.prepare("UPDATE products SET name = ?, description = ?, price = ?, image = ?, category = ?, delivery_content = ?, tags = ?, is_pinned = ?, carousel_order = ?, badge = ? WHERE id = ?").run(name, description, price, image, category || 'Общее', delivery_content || null, tags || null, is_pinned ? 1 : 0, co, badge || null, req.params.id);
       res.json({ success: true });
     } catch (err) {
       res.status(400).json({ error: "Ошибка при обновлении товара" });
     }
+  });
+
+  app.patch("/api/admin/products/:id/reorder", isAdmin, (req, res) => {
+    const { direction } = req.body; // 'up' | 'down'
+    const id = parseInt(req.params.id, 10);
+    const current = db.prepare("SELECT id, carousel_order, list_order FROM products WHERE id = ?").get(id) as { id: number; carousel_order: number | null; list_order: number | null } | undefined;
+    if (!current) return res.status(404).json({ error: "Товар не найден" });
+
+    if (current.carousel_order != null) {
+      const all = db.prepare("SELECT id, carousel_order FROM products WHERE carousel_order IS NOT NULL ORDER BY carousel_order ASC").all() as { id: number; carousel_order: number }[];
+      const idx = all.findIndex(p => p.id === id);
+      if (idx < 0) return res.status(400).json({ error: "Товар не найден в карусели" });
+      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= all.length) return res.json({ success: true });
+      const other = all[swapIdx];
+      db.prepare("UPDATE products SET carousel_order = ? WHERE id = ?").run(other.carousel_order, id);
+      db.prepare("UPDATE products SET carousel_order = ? WHERE id = ?").run(current.carousel_order, other.id);
+      return res.json({ success: true });
+    }
+
+    const listRows = db.prepare("SELECT id, list_order FROM products WHERE carousel_order IS NULL ORDER BY (list_order IS NULL), list_order ASC, id ASC").all() as { id: number; list_order: number | null }[];
+    const listIdx = listRows.findIndex(p => p.id === id);
+    if (listIdx < 0) return res.json({ success: true });
+    const swapListIdx = direction === 'up' ? listIdx - 1 : listIdx + 1;
+    if (swapListIdx < 0 || swapListIdx >= listRows.length) return res.json({ success: true });
+    const otherRow = listRows[swapListIdx];
+    const curOrder = current.list_order ?? current.id;
+    const otherOrder = otherRow.list_order ?? otherRow.id;
+    db.prepare("UPDATE products SET list_order = ? WHERE id = ?").run(otherOrder, id);
+    db.prepare("UPDATE products SET list_order = ? WHERE id = ?").run(curOrder, otherRow.id);
+    res.json({ success: true });
   });
 
   app.delete("/api/admin/products/:id", isAdmin, (req, res) => {
@@ -969,10 +1178,25 @@ async function startServer() {
     let minRaw = getSetting("min_topup_amount", "1");
     if (minRaw === "100") minRaw = "1"; // старый дефолт
     const minTopUp = Math.max(1, parseInt(minRaw, 10) || 1);
-    const { amount, paymentMethod } = req.body;
+    const { amount, paymentMethod, product_id: productIdRaw } = req.body;
     const amt = parseInt(amount);
-    if (!amount || amt < minTopUp) {
-      return res.status(400).json({ error: `Минимальная сумма пополнения — ${minTopUp} ₽` });
+    const productId = productIdRaw != null ? parseInt(String(productIdRaw), 10) : null;
+    if (productId != null) {
+      const product = db.prepare("SELECT id, price, name, delivery_content FROM products WHERE id = ?").get(productId) as any;
+      if (!product) return res.status(400).json({ error: "Товар не найден" });
+      if (amt !== product.price) return res.status(400).json({ error: "Сумма должна совпадать с ценой товара" });
+      if (cfg.demo) {
+        const token = createDeliveryToken(productId, req.user.id);
+        if (token) {
+          db.prepare("INSERT INTO purchases (user_id, product_id, quantity, delivery_content) VALUES (?, ?, 1, ?)").run(req.user.id, productId, product.delivery_content ?? null);
+          createNotificationForAdmins("purchase", "Оплата товара (демо)", `Пользователь получил товар в демо-режиме — ${amt} ₽`, "/admin");
+          return res.json({ redirect: `${SITE_URL}/delivery/${token}`, delivery_token: token });
+        }
+      }
+    } else {
+      if (!amount || amt < minTopUp) {
+        return res.status(400).json({ error: `Минимальная сумма пополнения — ${minTopUp} ₽` });
+      }
     }
     const methodKey = typeof paymentMethod === "string" ? paymentMethod.toLowerCase() : "sbp";
     const plategaMethod = paymentMethodMap[methodKey] ?? 2;
@@ -981,15 +1205,18 @@ async function startServer() {
     }
     const plategaHeaders = { "Content-Type": "application/json", "X-MerchantId": cfg.merchant, "X-Secret": cfg.secret };
     try {
-      const returnUrl = `${SITE_URL}/topup/success`;
-      const failedUrl = `${SITE_URL}/topup?failed=1`;
+      const returnUrl = productId != null ? `${SITE_URL}/topup/success?product_id=${productId}` : `${SITE_URL}/topup/success`;
+      const failedUrl = productId != null ? `${SITE_URL}/products/${productId}?pay&failed=1` : `${SITE_URL}/topup?failed=1`;
+      const description = productId != null
+        ? `Оплата товара BossExam — ${amt} ₽`
+        : `Пополнение баланса BossExam — ${amt} ₽`;
       const plategaRes = await fetch(`${cfg.base}/transaction/process`, {
         method: "POST",
         headers: plategaHeaders,
         body: JSON.stringify({
           paymentMethod: plategaMethod,
           paymentDetails: { amount: amt, currency: "RUB" },
-          description: `Пополнение баланса BossExam — ${amt} ₽`,
+          description,
           return: returnUrl,
           failedUrl,
           payload: String(req.user.id),
@@ -1004,8 +1231,8 @@ async function startServer() {
         return res.status(500).json({ error: "Нет ссылки на оплату" });
       }
       db.prepare(
-        "INSERT INTO payment_pending (user_id, amount_rub, platega_transaction_id, status) VALUES (?, ?, ?, 'PENDING')"
-      ).run(req.user.id, amt, transactionId);
+        "INSERT INTO payment_pending (user_id, amount_rub, platega_transaction_id, status, product_id) VALUES (?, ?, ?, 'PENDING', ?)"
+      ).run(req.user.id, amt, transactionId, productId);
       // transactionId хранится в payment_pending по user_id
       res.json({
         redirect: data.redirect || data.payformSuccessUrl,
@@ -1036,11 +1263,18 @@ async function startServer() {
         "SELECT * FROM payment_pending WHERE platega_transaction_id = ? AND status = 'PENDING'"
       ).get(id) as any;
       if (row) {
-        db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(row.amount_rub, row.user_id);
+        if (row.product_id) {
+          const product = db.prepare("SELECT delivery_content FROM products WHERE id = ?").get(row.product_id) as { delivery_content: string } | undefined;
+          db.prepare("INSERT INTO purchases (user_id, product_id, quantity, delivery_content) VALUES (?, ?, 1, ?)").run(row.user_id, row.product_id, product?.delivery_content ?? null);
+          createDeliveryToken(row.product_id, row.user_id);
+          createNotificationForAdmins("purchase", "Оплата товара", `Пользователь оплатил товар на ${row.amount_rub} ₽ (прямая ссылка)`, "/admin");
+        } else {
+          db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(row.amount_rub, row.user_id);
+          const u = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(row.user_id) as { username: string; display_name: string };
+          const name = u?.display_name || u?.username || "Пользователь";
+          createNotificationForAdmins("topup", "Пополнение баланса", `${name} пополнил баланс на ${row.amount_rub} ₽ (оплата)`, "/admin");
+        }
         db.prepare("UPDATE payment_pending SET status = 'CONFIRMED' WHERE id = ?").run(row.id);
-        const u = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(row.user_id) as { username: string; display_name: string };
-        const name = u?.display_name || u?.username || "Пользователь";
-        createNotificationForAdmins("topup", "Пополнение баланса", `${name} пополнил баланс на ${row.amount_rub} ₽ (оплата)`, "/admin");
       }
     } catch (err: any) {
       console.error("Payment webhook error:", err);
@@ -1048,10 +1282,29 @@ async function startServer() {
     res.status(200).send("OK");
   });
 
+  app.get("/api/delivery/:token", (req, res) => {
+    const row = db.prepare("SELECT product_id, product_name, delivery_content FROM delivery_tokens WHERE token = ?").get(req.params.token) as { product_id: number; product_name: string; delivery_content: string | null } | undefined;
+    if (!row) return res.status(404).json({ error: "Ссылка не найдена или устарела" });
+    const product = db.prepare("SELECT image, price, category FROM products WHERE id = ?").get(row.product_id) as { image: string | null; price: number; category: string | null } | undefined;
+    res.json({
+      product_id: row.product_id,
+      product_name: row.product_name,
+      delivery_content: row.delivery_content,
+      product_image: product?.image ?? null,
+      product_price: product?.price ?? null,
+      product_category: product?.category ?? null,
+    });
+  });
+
   app.get("/api/payment/check-return", isAdmin, async (req: any, res) => {
-    const row = db.prepare("SELECT platega_transaction_id FROM payment_pending WHERE user_id = ? AND status = 'PENDING' ORDER BY id DESC LIMIT 1").get(req.user.id) as { platega_transaction_id: string } | undefined;
+    let row = db.prepare("SELECT * FROM payment_pending WHERE user_id = ? AND status = 'PENDING' ORDER BY id DESC LIMIT 1").get(req.user.id) as any;
     const transactionId = row?.platega_transaction_id;
     if (!transactionId) {
+      const confirmedRow = db.prepare("SELECT * FROM payment_pending WHERE user_id = ? AND status = 'CONFIRMED' AND product_id IS NOT NULL ORDER BY id DESC LIMIT 1").get(req.user.id) as any;
+      if (confirmedRow) {
+        const tok = db.prepare("SELECT token FROM delivery_tokens WHERE user_id = ? AND product_id = ? ORDER BY created_at DESC LIMIT 1").get(req.user.id, confirmedRow.product_id) as { token: string } | undefined;
+        if (tok) return res.json({ status: "CONFIRMED", credited: true, product_id: confirmedRow.product_id, delivery_token: tok.token });
+      }
       return res.json({ status: "NONE", credited: false });
     }
     const cfg = getPlategaConfig();
@@ -1070,20 +1323,29 @@ async function startServer() {
       }
       const status = data.status;
       if (status === "CONFIRMED") {
-        const row = db.prepare("SELECT * FROM payment_pending WHERE platega_transaction_id = ? AND status = 'PENDING'").get(transactionId) as any;
-        if (row) {
-          db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(row.amount_rub, row.user_id);
-          db.prepare("UPDATE payment_pending SET status = 'CONFIRMED' WHERE id = ?").run(row.id);
-          const u = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(row.user_id) as { username: string; display_name: string };
-          const name = u?.display_name || u?.username || "Пользователь";
-          createNotificationForAdmins("topup", "Пополнение баланса", `${name} пополнил баланс на ${row.amount_rub} ₽ (оплата)`, "/admin");
-          if (req.user && req.user.id === row.user_id) {
-            const user = db.prepare("SELECT balance FROM users WHERE id = ?").get(row.user_id) as any;
+        const pendingRow = db.prepare("SELECT * FROM payment_pending WHERE platega_transaction_id = ? AND status = 'PENDING'").get(transactionId) as any;
+        let deliveryToken: string | null = null;
+        if (pendingRow) {
+          if (pendingRow.product_id) {
+            const product = db.prepare("SELECT delivery_content FROM products WHERE id = ?").get(pendingRow.product_id) as { delivery_content: string } | undefined;
+            db.prepare("INSERT INTO purchases (user_id, product_id, quantity, delivery_content) VALUES (?, ?, 1, ?)").run(pendingRow.user_id, pendingRow.product_id, product?.delivery_content ?? null);
+            deliveryToken = createDeliveryToken(pendingRow.product_id, pendingRow.user_id);
+            createNotificationForAdmins("purchase", "Оплата товара", `Пользователь оплатил товар на ${pendingRow.amount_rub} ₽ (прямая ссылка)`, "/admin");
+          } else {
+            db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(pendingRow.amount_rub, pendingRow.user_id);
+            const u = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(pendingRow.user_id) as { username: string; display_name: string };
+            const name = u?.display_name || u?.username || "Пользователь";
+            createNotificationForAdmins("topup", "Пополнение баланса", `${name} пополнил баланс на ${pendingRow.amount_rub} ₽ (оплата)`, "/admin");
+          }
+          db.prepare("UPDATE payment_pending SET status = 'CONFIRMED' WHERE id = ?").run(pendingRow.id);
+          if (req.user && req.user.id === pendingRow.user_id && !pendingRow.product_id) {
+            const user = db.prepare("SELECT balance FROM users WHERE id = ?").get(pendingRow.user_id) as any;
             req.user.balance = user.balance;
           }
         }
-        // транзакция обработана в БД
-        return res.json({ status: "CONFIRMED", credited: true });
+        if (pendingRow && deliveryToken) return res.json({ status: "CONFIRMED", credited: true, product_id: pendingRow.product_id, delivery_token: deliveryToken });
+        if (pendingRow) return res.json({ status: "CONFIRMED", credited: true, product_id: pendingRow.product_id ?? null });
+        return res.json({ status: "CONFIRMED", credited: true, product_id: null });
       }
       if (status === "CANCELED" || status === "CHARGEBACKED") {
         // транзакция обработана в БД
@@ -1094,6 +1356,8 @@ async function startServer() {
       return res.json({ status: "ERROR", credited: false });
     }
   });
+
+  regenerateSitemapFile();
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {

@@ -15,10 +15,21 @@ interface User {
   created_at?: string | null;
 }
 
+export interface TelegramAuthUser {
+  id: number;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+  auth_date: number;
+  hash: string;
+}
+
 interface AuthContextType {
   user: User | null;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
+  loginWithTelegram: (telegramUser: TelegramAuthUser) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   loading: boolean;
@@ -82,6 +93,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(data.user);
   };
 
+  const loginWithTelegram = async (telegramUser: TelegramAuthUser) => {
+    const res = await fetch('/api/auth/telegram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(telegramUser),
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Ошибка входа через Telegram');
+    }
+    const data = await res.json();
+    if (data.token) setToken(data.token);
+    setUser(data.user);
+  };
+
   const logout = async () => {
     await authFetch('/api/logout', { method: 'POST' });
     removeToken();
@@ -89,7 +115,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, refreshUser, loading }}>
+    <AuthContext.Provider value={{ user, login, register, loginWithTelegram, logout, refreshUser, loading }}>
       {children}
     </AuthContext.Provider>
   );

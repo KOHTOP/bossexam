@@ -8,6 +8,8 @@ export const TopUpSuccessPage: React.FC = () => {
   const { refreshUser } = useAuth();
   const [status, setStatus] = useState<'loading' | 'CONFIRMED' | 'PENDING' | 'ERROR' | 'CANCELED' | 'NONE'>('loading');
   const [credited, setCredited] = useState(false);
+  const [productId, setProductId] = useState<number | null>(null);
+  const [deliveryToken, setDeliveryToken] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -18,7 +20,13 @@ export const TopUpSuccessPage: React.FC = () => {
         if (cancelled) return;
         setStatus(data.status || 'ERROR');
         setCredited(!!data.credited);
+        if (data.product_id != null) setProductId(data.product_id);
+        if (data.delivery_token) setDeliveryToken(data.delivery_token);
         if (data.credited) refreshUser?.();
+        if (data.delivery_token) {
+          window.location.href = `/delivery/${data.delivery_token}`;
+          return;
+        }
       } catch {
         if (!cancelled) setStatus('ERROR');
       }
@@ -40,11 +48,25 @@ export const TopUpSuccessPage: React.FC = () => {
           <div className="w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center mx-auto">
             <CheckCircle2 size={48} className="text-green-500" />
           </div>
-          <h1 className="text-2xl font-black">Баланс пополнен</h1>
-          <p className="text-muted-foreground">Средства зачислены на ваш счёт.</p>
-          <Link to="/topup" className="inline-block bg-primary text-white px-8 py-3 rounded-2xl font-bold hover:bg-primary/90">
-            Пополнить снова
-          </Link>
+          <h1 className="text-2xl font-black">{productId ? 'Товар оплачен' : 'Баланс пополнен'}</h1>
+          <p className="text-muted-foreground">
+            {productId ? 'Товар добавлен в раздел «Мои покупки» в профиле.' : 'Средства зачислены на ваш счёт.'}
+          </p>
+          <div className="flex flex-wrap gap-3 justify-center">
+            {productId && deliveryToken && (
+              <Link to={`/delivery/${deliveryToken}`} className="inline-block bg-primary text-white px-8 py-3 rounded-2xl font-bold hover:bg-primary/90">
+                Перейти к выдаче
+              </Link>
+            )}
+            {productId && (
+              <Link to="/profile" className="inline-block border border-[var(--border)] px-8 py-3 rounded-2xl font-bold hover:bg-[var(--muted)]">
+                В покупки
+              </Link>
+            )}
+            <Link to={productId ? '/products' : '/topup'} className="inline-block border border-[var(--border)] px-8 py-3 rounded-2xl font-bold hover:bg-[var(--muted)]">
+              {productId ? 'В каталог' : 'Пополнить снова'}
+            </Link>
+          </div>
         </>
       )}
       {status === 'PENDING' && (
