@@ -1,0 +1,16 @@
+[
+  {
+    "type": "ssh",
+    "name": "de1",
+    "host": "64.188.71.89",
+    "port": 41827,
+    "user": "user"
+  },
+  {
+    "type": "ssh",
+    "name": "fl1",
+    "host": "64.188.74.171",
+    "port": 41827,
+    "user": "user"
+  }
+]
